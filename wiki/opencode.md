@@ -43,3 +43,7 @@ Stop the lifecycle and connector. Remove execution tunnel and DNS resources. Rec
 Run `account-credentials.mjs install-console` after the V2 server becomes healthy and before starting model work. Import the account's Console OAuth credential through `/api/credential` with method `device` and workspace metadata. Remove only the matching legacy duplicate. Start the account synchronization watcher after native import so it inherits the server port and password. Read refreshed Console tokens from `/api/credential`; retain other providers' existing synchronization behavior. Stop uploads after a revision conflict and preserve the active native connection until final cleanup.
 
 Run `node --test scripts/console-credentials.test.mjs`. Run the account credential tests relevant to load, cleanup, concurrency, MCP, and provider merging. Run `node scripts/test-console-runtime.mjs` against an isolated latest-stable OpenCode v2 server with an explicitly authorized Console test token file. Keep the token file private and remove it after verification.
+
+## Continue with optional history
+
+Restore pinned source code when continuing. Import conversation history only when resume metadata sets `import_history` to `true`. Otherwise skip conversation download and start a fresh chat. Retain fresh-chat fallback when an enabled import fails.

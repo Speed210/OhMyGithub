@@ -109,7 +109,8 @@ export function prepare() {
     else if (status === '200') payload = JSON.parse(readFileSync(download, 'utf8'))
     else throw new Error(`GitHub checkpoint read failed (${status}).`)
     payload.commit = source.source_commit
-    payload.code_only = payload.conversation_status !== 'saved'
+    payload.import_history = source.import_history === true
+    payload.code_only = !payload.import_history || payload.conversation_status !== 'saved'
     if (!payload.code_only) {
       try {
         command('curl', ['--fail', '--silent', '--show-error', '--max-filesize', '100000000', '--max-time', '120', '--output', download, `${raw}/.omgithub/conversation.json`])
@@ -152,7 +153,7 @@ export function restore() {
     process.stderr.write('Code restored. Started a fresh chat.\n')
     return { status: 'fresh' }
   }
-  if (checkpoint.code_only) return fresh()
+  if (checkpoint.import_history !== true || checkpoint.code_only) return fresh()
   const binary = env.OPENCODE_BIN || join(env.HOME, '.opencode/bin/opencode')
   // Verify the running binary independently; an invalid runtime is not an import failure.
   const version = normalizedVersion(command(binary, ['--version']))

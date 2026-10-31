@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, openSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { saveCheckpoint, restore, validateCheckpoint, redactSession, excludedPath } from './session-checkpoint.mjs'
+import { saveCheckpoint, prepare, restore, validateCheckpoint, redactSession, excludedPath } from './session-checkpoint.mjs'
 
 test('Git checkpoints preserve source and v2 history, deduplicate, skip large files, and fast-forward', () => {
   const dir = mkdtempSync(join(tmpdir(), 'git-checkpoint-')), original = { ...process.env }
@@ -43,7 +43,7 @@ else process.exit(1);
     writeFileSync(join(root, 'index.html'), '<h1>Changed</h1>')
     const second = saveCheckpoint()
     assert.equal(git('rev-parse', `${second.commit}^`), first.commit)
-    const payload = { ...manifest, commit: second.commit, session }
+    const payload = { import_history: true, ...manifest, commit: second.commit, session }
     process.env.RESUME_CHECKPOINT_FILE = join(state, 'restore.json')
     writeFileSync(process.env.RESUME_CHECKPOINT_FILE, JSON.stringify(payload));restore()
     assert.match(readFileSync(process.env.GITHUB_ENV, 'utf8'), /ses_saved/)
@@ -66,7 +66,7 @@ test('restore older saved history on a newer runtime; import failures keep code 
     mkdirSync(state)
     const session = { info: { id: 'ses_older', location: { directory: dir } }, messages: [{ type: 'user', id: 'msg_one', content: [{ type: 'text', text: 'Keep this game' }] }] }
     const checkpoint = join(dir, 'checkpoint.json')
-    writeFileSync(checkpoint, JSON.stringify({ opencode_version: '2.2.2', session }))
+    writeFileSync(checkpoint, JSON.stringify({ import_history: true, opencode_version: '2.2.2', session }))
     writeFileSync(join(dir, 'index.html'), '<h1>Keep saved code</h1>')
     writeFileSync(binary, `#!/usr/bin/env node
 const fs=require('node:fs'),p=require('node:path'),args=process.argv.slice(2),state=p.join(process.env.OPENCODE_WEB_DIR,'imported.json');
@@ -85,6 +85,61 @@ else process.exit(1);
       assert.equal(JSON.parse(readFileSync(join(state, 'resume-status.json'))).status, 'fresh')
       assert.equal(readFileSync(join(dir, 'index.html'), 'utf8'), '<h1>Keep saved code</h1>')
       process.env[failure] = ''
+    }
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]
+    Object.assign(process.env, original); rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('restore starts fresh without explicit history opt-in, even with a valid conversation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'resume-no-import-')), original = { ...process.env }
+  try {
+    const checkpoint = join(dir, 'checkpoint.json')
+    Object.assign(process.env, { RESUME_CHECKPOINT_FILE: checkpoint, OPENCODE_BIN: '/must-not-run', OPENCODE_WEB_DIR: dir, GITHUB_ENV: join(dir, 'env') })
+    for (const choice of [undefined, false, 'true']) {
+      process.env.RESUME_SESSION_ID = 'ses_stale'
+      writeFileSync(checkpoint, JSON.stringify({ import_history: choice, session: { info: { id: 'ses_saved' }, messages: [] } }))
+      assert.equal(restore().status, 'fresh')
+      assert.equal(process.env.RESUME_SESSION_ID, undefined)
+      assert.equal(JSON.parse(readFileSync(join(dir, 'resume-status.json'))).status, 'fresh')
+    }
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]
+    Object.assign(process.env, original); rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+
+test('prepare downloads history only on explicit opt-in and always restores the pinned code', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prepare-history-')), original = { ...process.env }
+  try {
+    const bin = join(dir, 'bin'), state = join(dir, 'state'), sha = 'a'.repeat(40)
+    mkdirSync(bin); mkdirSync(state)
+    const log = join(dir, 'calls')
+    const session = { info: { id: 'ses_saved' }, messages: [{ type: 'user', id: 'msg_one', content: [{ type: 'text', text: 'Build a game' }] }] }
+    writeFileSync(join(bin, 'curl'), `#!/usr/bin/env node
+const fs=require('node:fs'),crypto=require('node:crypto'),a=process.argv.slice(2),url=a.at(-1),s=JSON.stringify(${JSON.stringify(session)});
+fs.appendFileSync(process.env.TEST_CALLS,url+'\\n');
+fs.writeFileSync(a[a.indexOf('--output')+1],url.endsWith('/conversation.json')?s:JSON.stringify({version:2,repository:'alice/game',issue_number:6,run_id:123,branch:'opencode-checkpoints/6',project_dir:'game',opencode_version:'2.2.2',public_history:true,conversation_status:'saved',session_sha256:crypto.createHash('sha256').update(s).digest('hex')}));
+if(a.includes('--write-out'))process.stdout.write('200');
+`, { mode: 0o755 })
+    writeFileSync(join(bin, 'git'), `#!/usr/bin/env node
+require('node:fs').appendFileSync(process.env.TEST_CALLS,JSON.stringify(process.argv.slice(2))+'\\n');
+`, { mode: 0o755 })
+    Object.assign(process.env, { PATH: bin + ':' + original.PATH, RUNNER_TEMP: state, GITHUB_WORKSPACE: dir, GITHUB_ENV: join(dir, 'env'), TEST_CALLS: log })
+    delete process.env.SNAPSHOT_SOURCE_REPOSITORY
+    for (const choice of [undefined, false, 'true', true]) {
+      writeFileSync(log, '')
+      process.env.COMMENT_BODY = '<!-- omgithub-resume:v1 ' + JSON.stringify({ source_repository: 'alice/game', source_issue: 6, checkpoint_tag: 'opencode-checkpoint-6', source_commit: sha, user_prompt: 'Continue', import_history: choice }) + ' -->'
+      prepare()
+      const calls = readFileSync(log, 'utf8'), payload = JSON.parse(readFileSync(join(state, 'omgithub-restore-checkpoint.json'), 'utf8'))
+      assert.equal(calls.includes('/conversation.json'), choice === true)
+      assert.equal(payload.import_history, choice === true)
+      assert.equal(payload.code_only, choice !== true)
+      assert.equal(Boolean(payload.session), choice === true)
+      assert.ok(calls.includes(JSON.stringify(['checkout', '--detach', sha])))
+      assert.equal(payload.project_dir, 'game')
     }
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]
