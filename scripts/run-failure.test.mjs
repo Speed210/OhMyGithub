@@ -4,9 +4,12 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { modelFailureReason, readFailureReason, failurePayload } from './run-failure.mjs'
+const overloadedMessage = 'We’re running low on spare robot brains. Please try again in a moment!'
 const event = error => JSON.stringify({ type: 'error', error })
 test('report free quota, rate limits, and rejected credentials without echoing provider bodies', () => {
-  assert.match(modelFailureReason(event({ type: 'provider.free-limit', status: 429, message: 'private provider message' })), /free-model quota/)
+  assert.equal(modelFailureReason(event({ type: 'provider.free-limit', status: 429, message: 'private provider message' })), overloadedMessage)
+  assert.equal(modelFailureReason(event({ message: 'FreeUsageLimitError' })), overloadedMessage)
+  assert.equal(modelFailureReason(event({ message: 'free usage limit reached' })), overloadedMessage)
   assert.match(modelFailureReason(event({ type: 'unknown', status: 429 })), /rate limit/)
   assert.match(modelFailureReason(event({ status: 401, message: 'secret-token-value' })), /credentials/)
   assert.doesNotMatch(modelFailureReason(event({ status: 401, message: 'secret-token-value' })), /secret-token/)
@@ -22,10 +25,10 @@ test('read bounded tails, tolerate missing startup logs, and construct terminal 
   try {
     assert.match(readFailureReason(directory), /workflow failed/)
     writeFileSync(join(directory, 'opencode-run.log'), 'x'.repeat(70000) + '\n' + event({ type: 'provider.free-limit', status: 429 }))
-    assert.match(readFailureReason(directory), /free-model quota/)
+    assert.equal(readFailureReason(directory), overloadedMessage)
     const payload = failurePayload({ OPENCODE_WEB_DIR: directory, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '2' }, 5000)
     assert.equal(payload.run, '123'); assert.equal(payload.attempt, 2); assert.equal(payload.sequence, 5000)
     assert.equal(payload.outcome, 'failure'); assert.equal(payload.state, 'ended')
-    assert.match(payload.reason, /free-model quota/)
+    assert.equal(payload.reason, overloadedMessage)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })

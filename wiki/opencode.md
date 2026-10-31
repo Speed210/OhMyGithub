@@ -47,3 +47,7 @@ Run `node --test scripts/console-credentials.test.mjs`. Run the account credenti
 ## Continue with optional history
 
 Restore pinned source code when continuing. Import conversation history only when resume metadata sets `import_history` to `true`. Otherwise skip conversation download and start a fresh chat. Retain fresh-chat fallback when an enabled import fails.
+
+## Report overloaded service
+
+Show “We’re running low on spare robot brains. Please try again in a moment!” for free-model quota failures. Retain distinct messages for other provider failures.

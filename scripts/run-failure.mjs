@@ -10,7 +10,7 @@ export function modelFailureReason(log) {
   }
   if (!failure) return 'The build workflow failed. Open the workflow logs for details.'
   const type = String(failure.type || ''), message = String(failure.message || '')
-  if (type === 'provider.free-limit' || /FreeUsageLimit|free usage limit/i.test(message)) return 'OpenCode free-model quota reached. Connect a provider in Settings or choose a model with available quota.'
+  if (type === 'provider.free-limit' || /FreeUsageLimit|free usage limit/i.test(message)) return 'We’re running low on spare robot brains. Please try again in a moment!'
   if (Number(failure.status) === 429 || /rate.limit/i.test(type)) return 'The model provider rate limit was reached. Wait for quota to reset or choose a model with available quota.'
   if ([401, 403].includes(Number(failure.status))) return 'The model provider rejected its credentials. Check the connected provider in Settings.'
   if (/model.*not.found|not.found.*model/i.test(type)) return 'The selected model is unavailable. Choose another model.'
