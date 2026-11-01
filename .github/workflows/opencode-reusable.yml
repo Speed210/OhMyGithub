@@ -79,6 +79,7 @@ jobs:
       RUNTIME_REF: ${{ inputs.runtime_ref }}
       APP_PORT: 3000
       BRANCH_NAME: opencode/${{ github.run_id }}
+      AGENTSWEB_SSH_PUBLIC_KEY: ${{ secrets.AGENTSWEB_SSH_PUBLIC_KEY }}
       AGENTSWEB_SSH_ENABLED: ${{ secrets.AGENTSWEB_SSH_PUBLIC_KEY != '' }}
       TRIGGER_ISSUE_NUMBER: ${{ inputs.issue_number }}
       OMGITHUB_ORIGIN: ${{ vars.OMGITHUB_ORIGIN || 'https://omgithub.com' }}
@@ -173,6 +174,22 @@ jobs:
             "$RUNNER_TEMP/omgithub-ssh" "$RUNNER_TEMP/omgithub-web" \
             "$RUNNER_TEMP/omgithub-runtime" "$RUNNER_TEMP/omgithub-agentsweb" >> "$GITHUB_ENV"
 
+      - name: Fetch centralized OMG runtime outside the project
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -p git init "$RUNTIME_DIR"
+          /usr/bin/time -p git -C "$RUNTIME_DIR" remote add origin https://github.com/denaidark/OhMyGithub.git
+          /usr/bin/time -p git -C "$RUNTIME_DIR" fetch --depth=1 origin "$RUNTIME_REF"
+          /usr/bin/time -p git -C "$RUNTIME_DIR" checkout --detach FETCH_HEAD
+          [[ "$(git -C "$RUNTIME_DIR" rev-parse HEAD)" == "$RUNTIME_REF" ]]
+
+      - name: Load account credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -p node "$RUNTIME_DIR/scripts/account-credentials.mjs" load
+
       - name: Fetch AgentsWeb tunnel client outside the project
         if: env.TEST_REQUEST != 'true' && env.AGENTSWEB_SSH_ENABLED == 'true'
         timeout-minutes: 2
@@ -216,7 +233,7 @@ jobs:
           install -d -m 700 "$HOME/.ssh"
           {
             cat "$SSH_PUBLIC_KEY"
-            printf '%s\n' '${{ secrets.AGENTSWEB_SSH_PUBLIC_KEY }}'
+            printf '%s\n' "$AGENTSWEB_SSH_PUBLIC_KEY"
           } > "$HOME/.ssh/authorized_keys"
           chmod 600 "$HOME/.ssh/authorized_keys"
           [[ "$RUNNER_OS" != 'Linux' ]] || sudo mkdir -p /run/sshd
@@ -331,22 +348,6 @@ jobs:
           printf 'comment_id=%s\n' "$comment_id" >> "$GITHUB_OUTPUT"
 
           /usr/bin/time -p printf '## Worker SSH\n\n```sh\n%s\n```\n' "$SSH_COMMAND" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Fetch centralized OMG runtime outside the project
-        shell: bash
-        run: |
-          set -euo pipefail
-          /usr/bin/time -p git init "$RUNTIME_DIR"
-          /usr/bin/time -p git -C "$RUNTIME_DIR" remote add origin https://github.com/denaidark/OhMyGithub.git
-          /usr/bin/time -p git -C "$RUNTIME_DIR" fetch --depth=1 origin "$RUNTIME_REF"
-          /usr/bin/time -p git -C "$RUNTIME_DIR" checkout --detach FETCH_HEAD
-          [[ "$(git -C "$RUNTIME_DIR" rev-parse HEAD)" == "$RUNTIME_REF" ]]
-
-      - name: Load account credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          /usr/bin/time -p node "$RUNTIME_DIR/scripts/account-credentials.mjs" load
 
       - name: Prepare selected remix snapshot
         timeout-minutes: 15

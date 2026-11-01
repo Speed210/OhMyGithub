@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCredentialClient, writeEnv, escapeCommand } from './account-credentials.mjs'
 const initial = { openai: { type: 'oauth', access: 'initial-access', refresh: 'initial-refresh', expires: 123 } }
-function fixture(t, extra = {}, account = initial) {
+function fixture(t, extra = {}, account = initial, debugKey) {
   const dir = mkdtempSync(join(tmpdir(), 'credential-client-')); t.after(() => rmSync(dir, { force: true, recursive: true }))
   const env = { RUNNER_TEMP: dir, HOME: dir, GITHUB_ENV: join(dir, 'env'), GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', TRIGGER_ISSUE_NUMBER: '5', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://identity.test/token', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request-token', ...extra }
   const calls = [], masks = []
@@ -13,7 +13,7 @@ function fixture(t, extra = {}, account = initial) {
     if (String(url).startsWith('https://identity.test')) return Response.json({ value: 'signed-oidc' })
     assert.equal(options.headers.authorization, 'Bearer signed-oidc')
     const body = JSON.parse(options.body); calls.push(body)
-    return Response.json(body.operation === 'refresh' ? { revision: 'revision-2' } : { revision: 'revision-1', auth: body.use_auth ? account : null, secrets: { CUSTOM_SERVICE: 'secret\nmultiline', EXISTING_KEY: 'account-value' } })
+    return Response.json(body.operation === 'refresh' ? { revision: 'revision-2' } : { debug_ssh_public_key: debugKey, revision: 'revision-1', auth: body.use_auth ? account : null, secrets: { CUSTOM_SERVICE: 'secret\nmultiline', EXISTING_KEY: 'account-value' } })
   } })
   return { dir, env, calls, masks, client, file: join(dir, '.local/share/opencode/auth.json') }
 }
@@ -171,4 +171,26 @@ test('Console revision conflicts stop uploads without disconnecting active nativ
   await client.load(); await client.installConsole(); await client.sync(); assert.equal(removed, false)
   await client.sync(); assert.equal(refreshes, 1)
   await client.sync(true); assert.equal(removed, true); assert.equal(existsSync(f.file), false)
+})
+
+
+test('enable account debug fallback without overriding the repository key', async t => {
+  const key = 'ssh-ed25519 AAAATEST default'
+  const fallback = fixture(t, {}, null, key)
+  await fallback.client.load()
+  const output = readFileSync(fallback.env.GITHUB_ENV, 'utf8')
+  assert.match(output, /AGENTSWEB_SSH_PUBLIC_KEY<</)
+  assert.match(output, /AGENTSWEB_SSH_ENABLED<<[^\n]+\ntrue\n/)
+  const configured = fixture(t, { AGENTSWEB_SSH_PUBLIC_KEY: 'repository-key' }, null, key)
+  await configured.client.load()
+  assert.doesNotMatch(readFileSync(configured.env.GITHUB_ENV, 'utf8'), /AGENTSWEB_SSH_PUBLIC_KEY|AGENTSWEB_SSH_ENABLED/)
+  const disabled = fixture(t, {}, null)
+  await disabled.client.load()
+  assert.doesNotMatch(readFileSync(disabled.env.GITHUB_ENV, 'utf8'), /AGENTSWEB_SSH_PUBLIC_KEY|AGENTSWEB_SSH_ENABLED/)
+})
+test('load debug authorization before SSH and start SSH before package installation', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/opencode-reusable.yml', import.meta.url), 'utf8')
+  assert.ok(workflow.indexOf('name: Load account credentials') < workflow.indexOf('name: Start AgentsWeb SSH session'))
+  assert.ok(workflow.indexOf('name: Start AgentsWeb SSH session') < workflow.indexOf('name: Configure Linux Playwright'))
+  assert.ok(workflow.includes('printf \'%s\\n\' "$AGENTSWEB_SSH_PUBLIC_KEY"'))
 })

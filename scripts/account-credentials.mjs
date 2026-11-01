@@ -54,6 +54,11 @@ export function createCredentialClient({ env = process.env, request = fetch, mas
   }
   async function load() {
     const data = await call({ use_auth: true })
+    if (data.debug_ssh_public_key && !env.AGENTSWEB_SSH_PUBLIC_KEY) {
+      if (!/^ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?$/.test(data.debug_ssh_public_key)) throw new Error('Invalid debug public key')
+      writeEnv(env.GITHUB_ENV, 'AGENTSWEB_SSH_PUBLIC_KEY', data.debug_ssh_public_key)
+      writeEnv(env.GITHUB_ENV, 'AGENTSWEB_SSH_ENABLED', 'true')
+    }
     const mcp = data.mcp || {}
     if (Object.keys(mcp).length) {
       remember(Object.values(mcp).map(server => server.headers))
