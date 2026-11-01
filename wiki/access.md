@@ -37,3 +37,7 @@ Compare the default resolver with `dig @1.1.1.1 HOST` when a tunnel hostname fai
 Run the `Mac tunnel DNS regression` workflow after DNS, readiness, or worker-workflow changes. Require a newly allocated Quick Tunnel to serve the exact local-origin response through ordinary Node fetch and curl within five minutes. Keep its automatic main-branch path trigger enabled. Allow propagation retries without weakening the readiness predicate or pinning edge addresses.
 
 Recover stale macOS cache entries only on disposable Actions Macs: require an ENOTFOUND/EAI_AGAIN for a Quick Tunnel hostname and a successful public DNS A-record query before flushing caches. Retry ordinary HTTPS once; keep the URL unavailable if that request fails. Retry unpublished names on later readiness polls rather than treating DNS records alone as readiness.
+
+## Connect before dependency setup
+
+Start the SSH tunnel immediately after worker-path setup and before fetching the execution runtime or installing build dependencies. Reuse installed sshd. Bound package installation when sshd is missing and omit tmux from SSH bootstrap. Verify the remote connection for normal and SSH-only runs. Publish the command immediately in the issue comment and job summary. Update that comment when OpenCode becomes ready.

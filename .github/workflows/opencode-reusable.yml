@@ -173,6 +173,165 @@ jobs:
             "$RUNNER_TEMP/omgithub-ssh" "$RUNNER_TEMP/omgithub-web" \
             "$RUNNER_TEMP/omgithub-runtime" "$RUNNER_TEMP/omgithub-agentsweb" >> "$GITHUB_ENV"
 
+      - name: Fetch AgentsWeb tunnel client outside the project
+        if: env.TEST_REQUEST != 'true' && env.AGENTSWEB_SSH_ENABLED == 'true'
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -p git clone --depth=1 --filter=blob:none --sparse \
+            https://github.com/denaidark/agent-workspace.git "$AGENTSWEB_DIR"
+          /usr/bin/time -p git -C "$AGENTSWEB_DIR" sparse-checkout set lolgames_tunnel
+          /usr/bin/time -p test -f "$AGENTSWEB_DIR/lolgames_tunnel/client.py"
+
+      - name: Start AgentsWeb SSH session
+        id: agentsweb
+        timeout-minutes: 5
+        if: env.TEST_REQUEST != 'true' && env.AGENTSWEB_SSH_ENABLED == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GITHUB_RUN_NUMBER starts at 1 in every repository, so using it here
+          # makes every new repository's first OMG run contend for port 32001.
+          # GITHUB_RUN_ID is globally unique and distributes runs across the
+          # broker's 32000-32999 public-port range.
+          REQUESTED_SSH_PORT=$((32000 + GITHUB_RUN_ID % 1000))
+          # Reuse the runner's sshd without touching apt or preview dependencies.
+          if [[ "$RUNNER_OS" == 'Linux' && ! -x /usr/sbin/sshd ]]; then
+            /usr/bin/time -p timeout --kill-after=10s 90s sudo -n apt-get \
+              -o Acquire::ForceIPv4=true -o Acquire::Retries=1 \
+              -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+            /usr/bin/time -p timeout --kill-after=10s 90s sudo -n apt-get \
+              -o Acquire::ForceIPv4=true -o Acquire::Retries=1 \
+              -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y openssh-server
+          fi
+          /usr/bin/time -p test -x /usr/sbin/sshd
+          install -d -m 700 "$SSH_DIR"
+          SSH_KEY="$RUNNER_TEMP/opencode-agentsweb-id_ed25519"
+          SSH_PUBLIC_KEY="$SSH_KEY.pub"
+          printf 'SSH_KEY=%s\nSSH_PUBLIC_KEY=%s\n' "$SSH_KEY" "$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
+          ssh-keygen -t ed25519 -f "$SSH_KEY" -N '' -q
+          chmod 600 "$SSH_KEY"
+          install -d -m 700 "$HOME/.ssh"
+          {
+            cat "$SSH_PUBLIC_KEY"
+            printf '%s\n' '${{ secrets.AGENTSWEB_SSH_PUBLIC_KEY }}'
+          } > "$HOME/.ssh/authorized_keys"
+          chmod 600 "$HOME/.ssh/authorized_keys"
+          [[ "$RUNNER_OS" != 'Linux' ]] || sudo mkdir -p /run/sshd
+          # shellcheck disable=SC2024
+          sudo /usr/sbin/sshd -D -e -p 2222 \
+            -o PasswordAuthentication=no -o PermitRootLogin=no \
+            -o PubkeyAuthentication=yes > "$SSH_DIR/sshd.log" 2>&1 &
+          echo $! > "$SSH_DIR/sshd.pid"
+          is_listening() {
+            if [[ "$RUNNER_OS" == 'macOS' ]]; then
+              if command -v nc >/dev/null 2>&1 && nc -z -w 1 127.0.0.1 2222 >/dev/null 2>&1; then
+                return 0
+              fi
+              command -v lsof >/dev/null 2>&1 && sudo lsof -nP -a -iTCP:2222 -sTCP:LISTEN >/dev/null 2>&1
+            elif command -v ss >/dev/null 2>&1; then
+              ss -ltn | grep -q ':2222 '
+            elif command -v lsof >/dev/null 2>&1; then
+              lsof -nP -a -iTCP:2222 -sTCP:LISTEN >/dev/null 2>&1
+            else
+              nc -z 127.0.0.1 2222 >/dev/null 2>&1
+            fi
+          }
+          for _ in {1..120}; do
+            if is_listening; then
+              break
+            fi
+            if ! kill -0 "$(cat "$SSH_DIR/sshd.pid")" 2>/dev/null; then
+              echo 'Local sshd exited before listening on port 2222.' >&2
+              sed -n '1,160p' "$SSH_DIR/sshd.log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          if ! is_listening; then
+            echo 'Local sshd did not start listening on port 2222.' >&2
+            sed -n '1,160p' "$SSH_DIR/sshd.log" >&2
+            exit 1
+          fi
+          nohup env PYTHONPATH="$AGENTSWEB_DIR" \
+            python3 -m lolgames_tunnel client 127.0.0.1:2222 \
+            --server agentsweb.space --name "$SSH_NAME" --public-port "$REQUESTED_SSH_PORT" \
+            > "$SSH_DIR/tunnel.log" 2>&1 &
+          echo $! > "$SSH_DIR/tunnel.pid"
+          for _ in {1..45}; do
+            grep -q '^ssh://' "$SSH_DIR/tunnel.log" && break
+            if ! kill -0 "$(cat "$SSH_DIR/tunnel.pid")" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if ! grep -q '^ssh://' "$SSH_DIR/tunnel.log"; then
+            echo 'AgentsWeb tunnel did not register.' >&2
+            sed -n '1,160p' "$SSH_DIR/tunnel.log" >&2
+            exit 1
+          fi
+          SSH_TUNNEL_URL="$(sed -n 's#^\(ssh://[^[:space:]]*\).*#\1#p' "$SSH_DIR/tunnel.log" | head -n 1)"
+          endpoint="$(sed -nE 's#^ssh://([^:[:space:]]+):([0-9]+).*$#\1 \2#p' "$SSH_DIR/tunnel.log" | head -n 1)"
+          if [[ -z "$endpoint" ]]; then
+            echo 'AgentsWeb tunnel registration did not contain a usable SSH endpoint.' >&2
+            sed -n '1,160p' "$SSH_DIR/tunnel.log" >&2
+            exit 1
+          fi
+          read -r SSH_HOST SSH_PORT <<<"$endpoint"
+          [[ -n "$SSH_HOST" && "$SSH_PORT" =~ ^[0-9]+$ ]]
+          SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/aiplay-agentsweb -p ${SSH_PORT} runner@${SSH_HOST}"
+          {
+            printf 'AGENTSWEB_HOST=%s\n' "$SSH_HOST"
+            printf 'AGENTSWEB_PORT=%s\n' "$SSH_PORT"
+            printf 'AGENTSWEB_COMMAND=%s\n' "$SSH_COMMAND"
+            printf 'AGENTSWEB_TUNNEL_URL=%s\n' "$SSH_TUNNEL_URL"
+          } >> "$GITHUB_ENV"
+          {
+            printf 'AGENTSWEB_HOST=%s\n' "$SSH_HOST"
+            printf 'AGENTSWEB_PORT=%s\n' "$SSH_PORT"
+            printf 'AGENTSWEB_COMMAND=%s\n' "$SSH_COMMAND"
+            printf 'AGENTSWEB_TUNNEL_URL=%s\n' "$SSH_TUNNEL_URL"
+          } > "$SSH_DIR/access.env"
+          printf 'host=%s\nport=%s\ncommand=%s\n' "$SSH_HOST" "$SSH_PORT" "$SSH_COMMAND" >> "$GITHUB_OUTPUT"
+          ssh_verified=''
+          for _ in {1..3}; do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+              -i "$SSH_KEY" -p "$SSH_PORT" "runner@$SSH_HOST" true; then
+              ssh_verified='true'
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$ssh_verified" != 'true' ]]; then
+            echo 'AgentsWeb registered, but the SSH endpoint is not reachable.' >&2
+            sed -n '1,160p' "$SSH_DIR/tunnel.log" >&2
+            exit 1
+          fi
+          if [[ "$SSH_ONLY_REQUEST" == 'true' ]]; then
+            body=$'🔐 **SSH-only debugging session is ready.**\n\n'
+          else
+            body=$'🔐 **Temporary AgentsWeb SSH session is ready.**\n\n'
+          fi
+          body+="Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"$'\n'
+          body+="SSH URL: \`${SSH_TUNNEL_URL}\`"$'\n'
+          body+="Host: \`${SSH_HOST}:${SSH_PORT}\`"$'\n\n'
+          body+=$'Connect while the job is active:\n\n```sh\n'
+          body+="${SSH_COMMAND}"$'\n```\n\n'
+          if [[ "$SSH_ONLY_REQUEST" == 'true' ]]; then
+            body+=$'This run skips OpenCode and holds the runner for five hours for interactive debugging.'
+          fi
+          comment_response="$(jq -n --arg body "$body" '{body: $body}' \
+            | gh api "repos/${TARGET_REPOSITORY}/issues/${TRIGGER_ISSUE_NUMBER}/comments" \
+              --method POST --input -)"
+          comment_id="$(jq -r '.id // empty' <<<"$comment_response")"
+          [[ -n "$comment_id" ]]
+          printf 'comment_id=%s\n' "$comment_id" >> "$GITHUB_OUTPUT"
+
+          /usr/bin/time -p printf '## Worker SSH\n\n```sh\n%s\n```\n' "$SSH_COMMAND" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Fetch centralized OMG runtime outside the project
         shell: bash
         run: |
@@ -214,16 +373,6 @@ jobs:
         run: |
           set -euo pipefail
           /usr/bin/time -p bash "$RUNTIME_DIR/scripts/setup-linux-playwright.sh"
-
-      - name: Fetch AgentsWeb tunnel client outside the project
-        if: env.TEST_REQUEST != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          /usr/bin/time -p git clone --depth=1 --filter=blob:none --sparse \
-            https://github.com/denaidark/agent-workspace.git "$AGENTSWEB_DIR"
-          /usr/bin/time -p git -C "$AGENTSWEB_DIR" sparse-checkout set lolgames_tunnel
-          /usr/bin/time -p test -f "$AGENTSWEB_DIR/lolgames_tunnel/client.py"
 
       - name: Resolve project directory
         shell: bash
@@ -369,143 +518,6 @@ jobs:
         run: |
           set -euo pipefail
           /usr/bin/time -p bash "$RUNTIME_DIR/scripts/setup-preview-runtime.sh"
-
-      - name: Start AgentsWeb SSH session
-        id: agentsweb
-        if: env.TEST_REQUEST != 'true' && env.AGENTSWEB_SSH_ENABLED == 'true'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          # GITHUB_RUN_NUMBER starts at 1 in every repository, so using it here
-          # makes every new repository's first OMG run contend for port 32001.
-          # GITHUB_RUN_ID is globally unique and distributes runs across the
-          # broker's 32000-32999 public-port range.
-          REQUESTED_SSH_PORT=$((32000 + GITHUB_RUN_ID % 1000))
-          if [[ "$RUNNER_OS" == 'Linux' ]]; then
-            sudo apt-get update
-            sudo apt-get install -y openssh-server tmux
-          else
-            command -v tmux >/dev/null 2>&1 || brew install tmux
-          fi
-          install -d -m 700 "$SSH_DIR"
-          SSH_KEY="$RUNNER_TEMP/opencode-agentsweb-id_ed25519"
-          SSH_PUBLIC_KEY="$SSH_KEY.pub"
-          printf 'SSH_KEY=%s\nSSH_PUBLIC_KEY=%s\n' "$SSH_KEY" "$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
-          ssh-keygen -t ed25519 -f "$SSH_KEY" -N '' -q
-          chmod 600 "$SSH_KEY"
-          install -d -m 700 "$HOME/.ssh"
-          {
-            cat "$SSH_PUBLIC_KEY"
-            printf '%s\n' '${{ secrets.AGENTSWEB_SSH_PUBLIC_KEY }}'
-          } > "$HOME/.ssh/authorized_keys"
-          chmod 600 "$HOME/.ssh/authorized_keys"
-          [[ "$RUNNER_OS" != 'Linux' ]] || sudo mkdir -p /run/sshd
-          # shellcheck disable=SC2024
-          sudo /usr/sbin/sshd -D -e -p 2222 \
-            -o PasswordAuthentication=no -o PermitRootLogin=no \
-            -o PubkeyAuthentication=yes > "$SSH_DIR/sshd.log" 2>&1 &
-          echo $! > "$SSH_DIR/sshd.pid"
-          is_listening() {
-            if [[ "$RUNNER_OS" == 'macOS' ]]; then
-              if command -v nc >/dev/null 2>&1 && nc -z -w 1 127.0.0.1 2222 >/dev/null 2>&1; then
-                return 0
-              fi
-              command -v lsof >/dev/null 2>&1 && sudo lsof -nP -a -iTCP:2222 -sTCP:LISTEN >/dev/null 2>&1
-            elif command -v ss >/dev/null 2>&1; then
-              ss -ltn | grep -q ':2222 '
-            elif command -v lsof >/dev/null 2>&1; then
-              lsof -nP -a -iTCP:2222 -sTCP:LISTEN >/dev/null 2>&1
-            else
-              nc -z 127.0.0.1 2222 >/dev/null 2>&1
-            fi
-          }
-          for _ in {1..120}; do
-            if is_listening; then
-              break
-            fi
-            if ! kill -0 "$(cat "$SSH_DIR/sshd.pid")" 2>/dev/null; then
-              echo 'Local sshd exited before listening on port 2222.' >&2
-              sed -n '1,160p' "$SSH_DIR/sshd.log" >&2
-              exit 1
-            fi
-            sleep 1
-          done
-          if ! is_listening; then
-            echo 'Local sshd did not start listening on port 2222.' >&2
-            sed -n '1,160p' "$SSH_DIR/sshd.log" >&2
-            exit 1
-          fi
-          nohup env PYTHONPATH="$AGENTSWEB_DIR" \
-            python3 -m lolgames_tunnel client 127.0.0.1:2222 \
-            --server agentsweb.space --name "$SSH_NAME" --public-port "$REQUESTED_SSH_PORT" \
-            > "$SSH_DIR/tunnel.log" 2>&1 &
-          echo $! > "$SSH_DIR/tunnel.pid"
-          for _ in {1..45}; do
-            grep -q '^ssh://' "$SSH_DIR/tunnel.log" && break
-            if ! kill -0 "$(cat "$SSH_DIR/tunnel.pid")" 2>/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-          if ! grep -q '^ssh://' "$SSH_DIR/tunnel.log"; then
-            echo 'AgentsWeb tunnel did not register.' >&2
-            sed -n '1,160p' "$SSH_DIR/tunnel.log" >&2
-            exit 1
-          fi
-          SSH_TUNNEL_URL="$(sed -n 's#^\(ssh://[^[:space:]]*\).*#\1#p' "$SSH_DIR/tunnel.log" | head -n 1)"
-          endpoint="$(sed -nE 's#^ssh://([^:[:space:]]+):([0-9]+).*$#\1 \2#p' "$SSH_DIR/tunnel.log" | head -n 1)"
-          if [[ -z "$endpoint" ]]; then
-            echo 'AgentsWeb tunnel registration did not contain a usable SSH endpoint.' >&2
-            sed -n '1,160p' "$SSH_DIR/tunnel.log" >&2
-            exit 1
-          fi
-          read -r SSH_HOST SSH_PORT <<<"$endpoint"
-          [[ -n "$SSH_HOST" && "$SSH_PORT" =~ ^[0-9]+$ ]]
-          SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/aiplay-agentsweb -p ${SSH_PORT} runner@${SSH_HOST}"
-          {
-            printf 'AGENTSWEB_HOST=%s\n' "$SSH_HOST"
-            printf 'AGENTSWEB_PORT=%s\n' "$SSH_PORT"
-            printf 'AGENTSWEB_COMMAND=%s\n' "$SSH_COMMAND"
-            printf 'AGENTSWEB_TUNNEL_URL=%s\n' "$SSH_TUNNEL_URL"
-          } >> "$GITHUB_ENV"
-          {
-            printf 'AGENTSWEB_HOST=%s\n' "$SSH_HOST"
-            printf 'AGENTSWEB_PORT=%s\n' "$SSH_PORT"
-            printf 'AGENTSWEB_COMMAND=%s\n' "$SSH_COMMAND"
-            printf 'AGENTSWEB_TUNNEL_URL=%s\n' "$SSH_TUNNEL_URL"
-          } > "$SSH_DIR/access.env"
-          printf 'host=%s\nport=%s\ncommand=%s\n' "$SSH_HOST" "$SSH_PORT" "$SSH_COMMAND" >> "$GITHUB_OUTPUT"
-          if [[ "$SSH_ONLY_REQUEST" == 'true' ]]; then
-            ssh_verified=''
-            for _ in {1..12}; do
-              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 \
-                -i "$SSH_KEY" -p "$SSH_PORT" "runner@$SSH_HOST" true; then
-                ssh_verified='true'
-                break
-              fi
-              sleep 5
-            done
-            if [[ "$ssh_verified" != 'true' ]]; then
-              echo 'AgentsWeb registered, but the SSH endpoint is not reachable.' >&2
-              sed -n '1,160p' "$SSH_DIR/tunnel.log" >&2
-              exit 1
-            fi
-            body=$'🔐 **SSH-only debugging session is ready.**\n\n'
-            body+="Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"$'\n'
-            body+="SSH URL: \`${SSH_TUNNEL_URL}\`"$'\n'
-            body+="Host: \`${SSH_HOST}:${SSH_PORT}\`"$'\n\n'
-            body+=$'Connect while the job is active:\n\n```sh\n'
-            body+="${SSH_COMMAND}"$'\n```\n\n'
-            body+=$'This run skips OpenCode and holds the runner for five hours for interactive debugging.'
-            comment_response="$(jq -n --arg body "$body" '{body: $body}' \
-              | gh api "repos/${TARGET_REPOSITORY}/issues/${TRIGGER_ISSUE_NUMBER}/comments" \
-                --method POST --input -)"
-            comment_id="$(jq -r '.id // empty' <<<"$comment_response")"
-            [[ -n "$comment_id" ]]
-            printf 'comment_id=%s\n' "$comment_id" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Post SSH-only access details
         id: ssh_access_comment
@@ -918,6 +930,7 @@ jobs:
         env:
           AGENTSWEB_SSH_ENABLED: ${{ env.AGENTSWEB_SSH_ENABLED }}
           AGENTSWEB_SSH_READY: ${{ steps.agentsweb.outcome == 'success' }}
+          EARLY_SSH_COMMENT_ID: ${{ steps.agentsweb.outputs.comment_id }}
           SSH_ACCESS_FILE: ${{ runner.temp }}/omgithub-ssh/access.env
           SSH_TUNNEL_LOG: ${{ runner.temp }}/omgithub-ssh/tunnel.log
         with:
@@ -958,9 +971,10 @@ jobs:
                 ? 'This is a synthetic OpenCode session for the full workflow test.'
                 : 'Open the project to access chat, live files, previews, and progress.'
             ].filter(Boolean).join('\n\n');
-            const comment = await github.rest.issues.createComment({
-              owner: process.env.TARGET_OWNER, repo: process.env.TARGET_REPO, issue_number: number, body
-            });
+            const earlyComment = Number(process.env.EARLY_SSH_COMMENT_ID);
+            const comment = earlyComment
+              ? await github.rest.issues.updateComment({ owner: process.env.TARGET_OWNER, repo: process.env.TARGET_REPO, comment_id: earlyComment, body })
+              : await github.rest.issues.createComment({ owner: process.env.TARGET_OWNER, repo: process.env.TARGET_REPO, issue_number: number, body });
             core.setOutput('comment_id', comment.data.id);
 
       - name: Wait for main OpenCode completion
