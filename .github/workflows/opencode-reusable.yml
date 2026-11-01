@@ -208,6 +208,7 @@ jobs:
           printf 'OPENCODE_PASSWORD=%s\nGOAL_REQUEST=false\nRALPH_REQUEST=false\nOMO_REQUEST=false\n' "$password" >> "$GITHUB_ENV"
 
       - name: Configure Linux Playwright CLI with WebGPU
+        timeout-minutes: 8
         if: runner.os == 'Linux'
         shell: bash
         run: |

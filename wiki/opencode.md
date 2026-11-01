@@ -51,3 +51,7 @@ Restore pinned source code when continuing. Import conversation history only whe
 ## Report overloaded service
 
 Show “We’re running low on spare robot brains. Please try again in a moment!” for free-model quota failures. Retain distinct messages for other provider failures.
+
+## Bound Linux package setup
+
+Force IPv4 for worker APT downloads. Limit mirror waits to twenty seconds and one retry. Limit the index refresh to three minutes and Linux browser setup to eight minutes. Inspect package setup when a worker never publishes SSH or chat links; these links start after browser installation.

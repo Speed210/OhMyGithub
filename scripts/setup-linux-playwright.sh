@@ -2,7 +2,14 @@
 set -euo pipefail
 runtime="$HOME/.local/share/omgithub-playwright"
 /usr/bin/time -p mkdir -p "$runtime/output"
-/usr/bin/time -p sudo -n apt-get update
+# Bound mirror stalls, including apt calls launched by Playwright's dependency installer.
+/usr/bin/time -p sudo -n tee /etc/apt/apt.conf.d/80omgithub-network >/dev/null <<'APT'
+Acquire::ForceIPv4 "true";
+Acquire::Retries "1";
+Acquire::http::Timeout "20";
+Acquire::https::Timeout "20";
+APT
+/usr/bin/time -p timeout --kill-after=10s 180s sudo -n apt-get update
 /usr/bin/time -p sudo -n apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb xauth lsof
 /usr/bin/time -p npm install --prefix "$runtime" --no-save --no-package-lock @playwright/cli@0.1.19 playwright
 /usr/bin/time -p "$runtime/node_modules/.bin/playwright" install --with-deps chromium
