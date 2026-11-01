@@ -55,3 +55,5 @@ Show “We’re running low on spare robot brains. Please try again in a moment!
 ## Bound Linux package setup
 
 Force IPv4 for worker APT downloads. Limit mirror waits to twenty seconds and one retry. Limit the index refresh to three minutes and Linux browser setup to eight minutes. Inspect package setup when a worker never publishes SSH or chat links; these links start after browser installation.
+
+Preserve the issue account and MCP selection when recovering an existing issue with a new runtime pin. Update its issue-specific credential authorization to the same runtime before restarting; changing only the listener causes account credential loading to return HTTP 403.
