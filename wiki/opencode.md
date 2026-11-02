@@ -2,6 +2,10 @@
 
 Use OpenCode v2. Keep the project owner’s source, conversation history, and generated builds in the project repository. Keep the GitHub App responsible for listener installation; prepare and execute issues in Actions.
 
+## Prefer Fusion
+
+Install `opencode-copilot-fusion` from the pinned `v0.1.0` Git tag when `FUSION_ACCESS_TOKEN` exists. Prepend `copilot-fusion-direct/fusion` to the default model chain. Advance to free models on Fusion auth, quota, route, or gateway failures. Keep explicit `model/*` labels single-model. Let OmGithub supply the signed-in account token through account credentials.
+
 ## Select execution
 
 Create an issue with the OpenCode label attached. Freeze its request, branch, and source commit during preparation. Keep the user request unchanged. Select branches through omgithub-request:v1 metadata. Serialize runs per issue. Install a current listener before requesting execution.

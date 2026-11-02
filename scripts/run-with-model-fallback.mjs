@@ -4,17 +4,30 @@ import { appendFileSync, openSync, writeSync, closeSync, readFileSync, writeFile
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+export const fusionModel = 'copilot-fusion-direct/fusion'
 export const preferredFreeModels = ['opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'opencode/mimo-v2.6-flash-free', 'opencode/big-pickle']
-export function modelCandidates(selected, live = null) {
-  if (!preferredFreeModels.includes(selected)) return [selected]
-  const available = preferredFreeModels.filter(model => !live || live.includes(model))
-  return [...new Set([selected, ...(available.length ? available : preferredFreeModels)])]
+export function defaultModelChain(fusionEnabled = false) {
+  return [...(fusionEnabled ? [fusionModel] : []), ...preferredFreeModels]
+}
+export function modelCandidates(selected, live = null, chain = preferredFreeModels) {
+  const candidates = [...new Set(chain)]
+  if (!candidates.includes(selected)) return [selected]
+  const free = candidates.filter(model => preferredFreeModels.includes(model))
+  const available = free.filter(model => !live || live.includes(model))
+  const freeChain = available.length ? available : free
+  return [...new Set(selected === fusionModel ? [fusionModel, ...freeChain] : [selected, ...freeChain])]
 }
 export function retryableProviderError(error) {
   if (!error || typeof error !== 'object') return false
   const type = String(error.type || ''), message = String(error.message || '')
   return [429, 500, 502, 503, 504].includes(Number(error.status)) || ['provider.free-limit', 'provider.rate-limit', 'provider.overloaded', 'provider.model-not-found'].includes(type) ||
     /FreeUsageLimit|ModelDeprecated|model.*(?:not found|unavailable|deprecated)|free usage limit|rate.limit/i.test(message)
+}
+export function fusionFallbackError(model, error) {
+  if (model !== fusionModel || !error || typeof error !== 'object') return false
+  const status = Number(error.status), type = String(error.type || ''), message = String(error.message || '')
+  return [401, 403, 404, 429, 500, 502, 503, 504].includes(status) ||
+    /Copilot \/auto|Fusion|Refuse fallback|Unexpected server error|quota|usage limit|chat limit|model.*not found/i.test(`${type} ${message}`)
 }
 export async function terminalAttemptOutcome({ api, sessionID, started, pause = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   if (!api || !/^ses_[A-Za-z0-9]+$/.test(sessionID)) return null
@@ -37,8 +50,8 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const candidates = [...new Set(models)]
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
-  // Preserve the existing connected OpenRouter fallback after the preferred free chain.
-  if (preferredFreeModels.includes(selected) && env.OPENROUTER_API_KEY && !candidates.includes('openrouter/cohere/north-mini-code:free')) candidates.push('openrouter/cohere/north-mini-code:free')
+  // Preserve the existing connected OpenRouter fallback after the free-model chain.
+  if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes('openrouter/cohere/north-mini-code:free')) candidates.push('openrouter/cohere/north-mini-code:free')
   let sessionID = env.RESUME_SESSION_ID || '', child, interrupted = false, code = 1
   const attempts = []
   const stop = signal => { interrupted = true; child?.kill(signal) }
@@ -82,7 +95,7 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
         writeFileSync(join(directory, 'main-completion.json'), JSON.stringify({ ...terminal, session_id: sessionID }))
       }
       else if (outcome === 'failed' || outcome === 'interrupted' || code === 0 && (failure || api)) code = 1
-      const retryable = outcome !== 'interrupted' && retryableProviderError(failure)
+      const retryable = outcome !== 'interrupted' && (retryableProviderError(failure) || fusionFallbackError(model, failure))
       attempts.push({ model, cli_code: cliCode, outcome: outcome || 'unverified', code, retryable, duration_ms: Date.now() - started })
       writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify(attempts))
       appendFileSync(logFile, `[timing] model ${model}: ${Date.now() - started} ms; cli exit ${cliCode}; terminal ${outcome || 'unverified'}; exit ${code}\n`)
@@ -99,7 +112,8 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [binary, port, promptFile, logFile, exitFile, selected] = process.argv.slice(2)
   try {
-    const result = await runModels({ binary, port, promptFile, logFile, exitFile, selected, models: process.env.OPENCODE_MODELS_JSON ? JSON.parse(process.env.OPENCODE_MODELS_JSON) : modelCandidates(selected) })
+    const result = await runModels({ binary, port, promptFile, logFile, exitFile, selected,
+      models: process.env.OPENCODE_MODELS_JSON ? JSON.parse(process.env.OPENCODE_MODELS_JSON) : modelCandidates(selected, null, defaultModelChain(Boolean(process.env.FUSION_ACCESS_TOKEN))) })
     process.exitCode = result.code
   } catch {
     appendFileSync(logFile, '[model-fallback] Model execution setup failed. Inspect the workflow configuration.\n')

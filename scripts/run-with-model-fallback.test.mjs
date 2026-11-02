@@ -3,17 +3,27 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runModels, modelCandidates, preferredFreeModels, retryableProviderError, terminalAttemptOutcome } from './run-with-model-fallback.mjs'
+import { runModels, modelCandidates, preferredFreeModels, retryableProviderError, terminalAttemptOutcome, defaultModelChain, fusionFallbackError, fusionModel } from './run-with-model-fallback.mjs'
 
 test('order preferred free candidates and preserve explicitly chosen non-free models', () => {
   assert.deepEqual(modelCandidates(preferredFreeModels[0]), preferredFreeModels)
   assert.deepEqual(modelCandidates(preferredFreeModels[1]), [preferredFreeModels[1], preferredFreeModels[0], ...preferredFreeModels.slice(2)])
   assert.deepEqual(modelCandidates(preferredFreeModels[0], [preferredFreeModels[0], preferredFreeModels[3]]), [preferredFreeModels[0], preferredFreeModels[3]])
   assert.deepEqual(modelCandidates('openai/gpt-6-astra'), ['openai/gpt-6-astra'])
+  const chain = defaultModelChain(true)
+  assert.deepEqual(chain, [fusionModel, ...preferredFreeModels])
+  assert.deepEqual(defaultModelChain(false), preferredFreeModels)
+  assert.deepEqual(modelCandidates(fusionModel, null, chain), chain)
+  assert.deepEqual(modelCandidates(preferredFreeModels[1], null, chain), [preferredFreeModels[1], preferredFreeModels[0], ...preferredFreeModels.slice(2)])
+  assert.deepEqual(modelCandidates(fusionModel, null, preferredFreeModels), [fusionModel])
 })
 test('only retry structured provider/model availability failures', () => {
   for (const error of [{ type: 'provider.free-limit' }, { status: 429 }, { status: 503 }, { message: 'ModelDeprecated' }]) assert.equal(retryableProviderError(error), true)
   for (const error of [undefined, { type: 'tool.error' }, { status: 401 }, { message: 'Game build failed' }]) assert.equal(retryableProviderError(error), false)
+})
+test('advance from Fusion on auth, quota, gateway, and route failures only', () => {
+  for (const error of [{ status: 401 }, { status: 429 }, { message: 'Copilot /auto returned HTTP 429' }, { message: 'Refuse fallback or GPT-4.1 route' }, { message: 'Unexpected server error' }]) assert.equal(fusionFallbackError(fusionModel, error), true)
+  for (const error of [undefined, { status: 500 }, { message: 'Unexpected server error' }]) assert.equal(fusionFallbackError('openai/gpt-6-astra', error), false)
 })
 async function fixture(pattern, resume = '') {
   const directory = mkdtempSync(join(tmpdir(), 'model-fallback-')), binary = join(directory, 'oc')
@@ -24,7 +34,7 @@ const fs=require('node:fs'),p=require('node:path'),args=process.argv.slice(2),f=
 const calls=fs.existsSync(f)?JSON.parse(fs.readFileSync(f)):[];calls.push(args);fs.writeFileSync(f,JSON.stringify(calls));
 const outcome=JSON.parse(process.env.PATTERN)[calls.length-1]||'success';
 console.log(JSON.stringify({type:'step_start',sessionID:'ses_main'}));
-if(outcome!=='success')console.log(JSON.stringify({type:'error',sessionID:'ses_main',error:outcome==='fatal'?{type:'tool.error',message:'Build failed'}:{type:'provider.free-limit',status:429}}));
+if(outcome!=='success')console.log(JSON.stringify({type:'error',sessionID:'ses_main',error:outcome==='fatal'?{type:'tool.error',message:'Build failed'}:outcome==='fusion-auth'?{type:'provider.auth',status:401,message:'Copilot /auto returned HTTP 401'}:{type:'provider.free-limit',status:429}}));
 process.exit(outcome==='success'||outcome==='zero-error'?0:1);
 `, { mode: 0o755 })
   return { directory, prompt, options: { binary, port: 4096, promptFile: join(directory, 'prompt'), logFile: join(directory, 'run.log'), exitFile: join(directory, 'run.exit'), selected: preferredFreeModels[0], models: preferredFreeModels,
@@ -64,6 +74,17 @@ test('stop immediately on success or unrelated failure; use connected fallback o
     const result = await runModels({ ...f.options, env: { ...f.options.env, OPENROUTER_API_KEY: 'configured' } })
     assert.equal(result.code, 0)
     assert.equal(result.attempts.at(-1).model, 'openrouter/cohere/north-mini-code:free')
+  } finally { f.close() }
+})
+test('try Fusion first and advance to the free chain on its auth failure', async () => {
+  const f = await fixture(['fusion-auth', 'success'])
+  try {
+    const chain = defaultModelChain(true)
+    const result = await runModels({ ...f.options, selected: fusionModel, models: chain })
+    assert.equal(result.code, 0)
+    assert.deepEqual(result.attempts.map(row => row.model), [fusionModel, preferredFreeModels[0]])
+    assert.equal(result.attempts[0].retryable, true)
+    assert.equal(readFileSync(join(f.directory, 'main-model'), 'utf8').trim(), preferredFreeModels[0])
   } finally { f.close() }
 })
 
