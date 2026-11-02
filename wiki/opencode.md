@@ -4,7 +4,7 @@ Use OpenCode v2. Keep the project owner’s source, conversation history, and ge
 
 ## Prefer Fusion
 
-Install `opencode-copilot-fusion` from the pinned `v0.1.0` Git tag when `FUSION_ACCESS_TOKEN` exists. Prepend `copilot-fusion-direct/fusion` to the default model chain. Advance to free models on Fusion auth, quota, route, or gateway failures. Keep explicit `model/*` labels single-model. Let OmGithub supply the signed-in account token through account credentials.
+Resolve the current `main` commit for `opencode-copilot-fusion` when `FUSION_ACCESS_TOKEN` exists. Install that exact SHA and record it in `FUSION_PLUGIN_COMMIT`, `fusion-plugin-commit.txt`, `opencode-run.log`, the issue access comment, and the log release. Prepend `copilot-fusion-direct/fusion` to the default model chain only when the SHA resolved. Advance to free models on Fusion auth, quota, route, or gateway failures. Keep explicit `model/*` labels single-model. Let OmGithub supply the signed-in account token through account credentials.
 
 ## Select execution
 
