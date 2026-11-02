@@ -2,8 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
-test('main prompt contains only the user request', () => {
-  assert.equal(read('../.github/prompts/01-build.md'), '@COMMENT_BODY@\n')
+test('main prompt is the user request followed by a build-without-asking instruction', () => {
+  const prompt = read('../.github/prompts/01-build.md')
+  assert.ok(prompt.startsWith('@COMMENT_BODY@\n'))
+  assert.match(prompt, /Build a complete, playable game now.*Do not ask clarifying questions; make reasonable assumptions/)
+  assert.doesNotMatch(prompt, /@(?!COMMENT_BODY@)[A-Z_]+@/)
 })
 test('script preparation precedes checkpoint replacement and publication', () => {
   const source = read('./session-deploy.mjs')

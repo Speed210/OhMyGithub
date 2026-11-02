@@ -156,3 +156,17 @@ test('V2 bootstrap redeems in the embedded origin, retains other servers, and re
   assert.equal(elements.retry.hidden, false)
   assert.equal(typeof elements.retry.onclick, 'function')
 })
+test('a question-only turn reports awaiting_reply and skips delivery; the reply turn deploys', async () => {
+  const calls = []
+  let asking = true
+  const lifecycle = new Lifecycle({ save: async () => { calls.push('save'); return {} }, deploy: async () => calls.push('deploy'), status: state => calls.push(state), awaiting: async ({ messageID }) => { calls.push(`check:${messageID}`); return asking } })
+  await lifecycle.complete('m1')
+  assert.deepEqual(calls, ['working', 'saving', 'save', 'check:m1', 'awaiting_reply'])
+  asking = false; calls.length = 0
+  await lifecycle.complete('m2')
+  assert.deepEqual(calls, ['working', 'saving', 'save', 'check:m2', 'deploying', 'deploy', 'ready'])
+  // A failing check never blocks delivery.
+  const fallback = new Lifecycle({ save: async () => ({}), deploy: async () => calls.push('deploy2'), awaiting: async () => { throw Error('api down') } })
+  await fallback.complete('m3')
+  assert.ok(calls.includes('deploy2'))
+})

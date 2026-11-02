@@ -32,8 +32,10 @@ test('registers connectivity without duplicating publication state', async t => 
   writeFileSync(join(dir, 'app-url'), 'https://allocated-but-not-ready.test')
   await registerRun({ OPENCODE_WEB_DIR: dir, PROJECT_DIR: dir, GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'alice/game', TRIGGER_ISSUE_NUMBER: '2', GH_TOKEN: 'fixture', OMGITHUB_ORIGIN: `http://127.0.0.1:${server.address().port}` }, undefined, async () => true)
   assert.equal(payload.urls.preview, '')
-  await registerRun({ OPENCODE_WEB_DIR: dir, PROJECT_DIR: dir, GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'alice/game', TRIGGER_ISSUE_NUMBER: '2', GH_TOKEN: 'fixture', OMGITHUB_ORIGIN: `http://127.0.0.1:${server.address().port}` }, undefined, async () => false)
+  const result = await registerRun({ OPENCODE_WEB_DIR: dir, PROJECT_DIR: dir, GITHUB_RUN_ID: '7', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'alice/game', TRIGGER_ISSUE_NUMBER: '2', GH_TOKEN: 'fixture', OMGITHUB_ORIGIN: `http://127.0.0.1:${server.address().port}` }, undefined, async () => false)
   assert.equal(payload.state, 'starting')
+  assert.equal(result.state, 'starting')
+  assert.ok(result.pending.some(url => url.endsWith('/omgithub/connect'))) // lifecycle retries these quickly
   assert.equal(payload.urls.opencode, '')
   assert.equal(payload.urls.files, '')
 })

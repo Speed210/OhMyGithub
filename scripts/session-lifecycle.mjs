@@ -1,6 +1,7 @@
 import { createV2Client, v2SessionUrl } from './opencode-v2-api.mjs'
 import { V2LifecycleBridge, isV2MainInterrupt, isV2MainPrompt } from './session-lifecycle-v2.mjs'
 import { registerRun } from './run-record.mjs'
+import { awaitingReply } from './awaiting-reply.mjs'
 import { uploadScreenshots } from './wip-upload.mjs'
 import { createServer, request as httpRequest } from 'node:http'
 import { connect } from 'node:net'
@@ -46,7 +47,7 @@ export async function registerDeployment(env, state, generation, error = '', req
 }
 
 export class Lifecycle {
-  constructor({ save, deploy, status = () => {} }) { Object.assign(this, { save, deploy, status }); this.generation = 0; this.active = null; this.lastMessage = ''; this.stopping = false }
+  constructor({ save, deploy, status = () => {}, awaiting = async () => false }) { Object.assign(this, { save, deploy, status, awaiting }); this.generation = 0; this.active = null; this.lastMessage = ''; this.stopping = false }
   async busy() {
     const generation = ++this.generation
     const active = this.active
@@ -72,6 +73,12 @@ export class Lifecycle {
       await this.status('saving', generation)
       const checkpoint = await this.save(controller.signal)
       if (!current() || !checkpoint) return
+      // A turn that only asked the user a question has nothing to deliver; skip preview repairs.
+      if (await Promise.resolve(this.awaiting({ messageID, signal: controller.signal })).catch(() => false)) {
+        if (current()) await this.status('awaiting_reply', generation)
+        return
+      }
+      if (!current()) return
       await this.status('deploying', generation)
       await this.deploy({ checkpoint, messageID, generation, signal: controller.signal, current })
       if (current()) await this.status('ready', generation)
@@ -190,6 +197,15 @@ async function serve() {
       if (!appURL) throw new Error('Preview failed: app tunnel unavailable')
       await child(process.execPath, [join(env.RUNTIME_DIR, 'scripts/session-deploy.mjs')], { signal, env: { ...env, APP_URL: appURL, CHECKPOINT_COMMIT: checkpoint.commit, CHECKPOINT_GENERATION: checkpoint.generation, MAIN_MESSAGE_ID: messageID, DEPLOYMENT_GENERATION: String(generation) } })
     },
+    awaiting: async ({ messageID }) => {
+      const id = mainID()
+      if (!id) return false
+      const result = awaitingReply(await v2api.messages(id))
+      if (!result.awaiting || (result.message_id && result.message_id !== messageID)) return false
+      writeFileSync(join(directory, 'awaiting-reply.json'), JSON.stringify({ message_id: messageID, reason: result.reason, since: new Date().toISOString() }))
+      process.stderr.write(`[awaiting-reply] ${messageID} asked a question without changing files; skipping delivery until a reply arrives.\n`)
+      return true
+    },
     status: async (state, generation, error = '') => {
       writeFileSync(join(directory, 'deployment-status.json'), JSON.stringify({ state, generation, error, message_id: lifecycle.lastMessage, updated_at: new Date().toISOString() }))
       if (state === 'working' && existsSync(join(directory, 'active-validation.json'))) {
@@ -252,8 +268,20 @@ async function serve() {
     remote.on('error', () => socket.destroy()); socket.on('error', () => remote.destroy())
   })
   let registration = Promise.resolve()
+  // Retry readiness every 2.5 s for up to 30 s per new set of unreachable URLs instead of waiting 30 s.
+  const fast = { key: '', until: 0, timer: null }
+  const retrySoon = pending => {
+    const key = pending.join(' ')
+    if (!key) { fast.key = ''; return }
+    if (key !== fast.key) Object.assign(fast, { key, until: Date.now() + 30000 })
+    if (fast.timer || Date.now() >= fast.until || lifecycle.stopping) return
+    fast.timer = setTimeout(() => { fast.timer = null; void heartbeat() }, 2500)
+  }
   const heartbeat = state => {
-    registration = registration.then(() => registerRun(env, state)).catch(error => console.error(error.message))
+    registration = registration.then(async () => {
+      const result = await registerRun(env, state)
+      if (!state) retrySoon(result?.pending || [])
+    }).catch(error => console.error(error.message))
     return registration
   }
   await new Promise(resolve => proxy.listen(Number(env.OPENCODE_CONTROL_PORT), '127.0.0.1', resolve))
@@ -276,6 +304,7 @@ async function serve() {
     proxy.close()
     proxy.closeAllConnections()
     clearInterval(heartbeatTimer)
+    clearTimeout(fast.timer)
     clearInterval(screenshotTimer)
     // Leave room for worker drain, the 120-second upload, and an ended callback.
     const deadline = setTimeout(() => {

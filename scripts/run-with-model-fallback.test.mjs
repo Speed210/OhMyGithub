@@ -14,7 +14,9 @@ test('order preferred free candidates and preserve explicitly chosen non-free mo
   assert.deepEqual(chain, [fusionModel, ...preferredFreeModels])
   assert.deepEqual(defaultModelChain(false), preferredFreeModels)
   assert.deepEqual(modelCandidates(fusionModel, null, chain), chain)
-  assert.deepEqual(modelCandidates(preferredFreeModels[1], null, chain), [preferredFreeModels[1], preferredFreeModels[0], ...preferredFreeModels.slice(2)])
+  assert.deepEqual(modelCandidates(preferredFreeModels[1], null, chain), [preferredFreeModels[1], fusionModel, preferredFreeModels[0], ...preferredFreeModels.slice(2)])
+  assert.deepEqual(modelCandidates('openai/gpt-6-astra', null, chain), ['openai/gpt-6-astra', fusionModel, ...preferredFreeModels])
+  assert.deepEqual(modelCandidates(preferredFreeModels[0], [preferredFreeModels[0], preferredFreeModels[2]], chain), [preferredFreeModels[0], fusionModel, preferredFreeModels[2]])
   assert.deepEqual(modelCandidates(fusionModel, null, preferredFreeModels), [fusionModel])
 })
 test('only retry structured provider/model availability failures', () => {

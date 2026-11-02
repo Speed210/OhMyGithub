@@ -1,4 +1,4 @@
-import { openSync, fstatSync, readSync, closeSync } from 'node:fs'
+import { openSync, fstatSync, readSync, closeSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,8 +16,22 @@ export function modelFailureReason(log) {
   if (/model.*not.found|not.found.*model/i.test(type)) return 'The selected model is unavailable. Choose another model.'
   return 'OpenCode could not complete the request. Open the workflow logs for details.'
 }
+// Delivery problems happen after the AI finished; never blame an earlier model attempt for them.
+export function deliveryFailureReason(message) {
+  const text = String(message || '')
+  if (/timed out/i.test(text)) return 'Publishing timed out: the game was not ready within 10 minutes of the AI finishing. Open the workflow logs for details.'
+  if (/Incomplete production delivery/i.test(text)) return 'Publishing failed: the preview or screenshots were incomplete. Open the workflow logs for details.'
+  if (/index\.html|package project|preview/i.test(text)) return 'Publishing failed: no playable game was produced. Open the workflow logs for details.'
+  return 'Publishing failed after the AI finished. Open the workflow logs for details.'
+}
+const readJson = (directory, name) => { try { return JSON.parse(readFileSync(join(directory, name), 'utf8')) } catch { return null } }
 export function readFailureReason(directory) {
   if (!directory) return modelFailureReason('')
+  const delivery = readJson(directory, 'delivery-failure.json')
+  if (delivery) return deliveryFailureReason(delivery.message)
+  const attempts = readJson(directory, 'model-attempts.json')
+  // A later model succeeded, so earlier free-limit errors in the log are not the cause.
+  if (Array.isArray(attempts) && attempts.length && attempts[attempts.length - 1]?.code === 0) return 'The build workflow failed after the AI finished. Open the workflow logs for details.'
   let fd
   try {
     fd = openSync(join(directory, 'opencode-run.log'), 'r')

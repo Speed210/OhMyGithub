@@ -109,12 +109,22 @@ test('job ends before the GitHub-hosted 6-hour limit', () => {
 
 test('successful real and test builds are labeled complete', () => {
   const block = workflow.split('      - name: Mark issue complete\n')[1].split('      - name:')[0];
-  assert.match(block, /if: success\(\) && env\.SSH_ONLY_REQUEST != 'true'\n/);
+  assert.match(block, /if: success\(\) && env\.SSH_ONLY_REQUEST != 'true' && env\.AWAITING_REPLY_ENDED != 'true'\n/);
   assert.doesNotMatch(block, /TEST_REQUEST/);
   assert.match(block, /name: 'in progress'/);
   assert.match(block, /labels: \['complete'\]/);
 });
 
+
+test('a session that ended while awaiting a reply is not labeled complete, skips the hold, and reports awaiting_reply', () => {
+  const waiting = workflow.split('      - name: Mark issue waiting for reply\n')[1].split('      - name:')[0];
+  assert.match(waiting, /env\.AWAITING_REPLY_ENDED == 'true'/);
+  assert.doesNotMatch(waiting, /labels: \['complete'\]|labels: \['failed'\]/);
+  const hold = workflow.split('      - name: Keep temporary access available\n')[1].split('      - name:')[0];
+  assert.match(hold, /env\.AWAITING_REPLY_ENDED != 'true'/);
+  const report = workflow.split('      - name: Report terminal build status\n')[1].split('      - name:')[0];
+  assert.match(report, /AWAITING_REPLY_ENDED == 'true' && 'awaiting_reply' \|\| job\.status/);
+});
 
 test('wait for final production delivery for real runs before reporting completion and cleanup', () => {
   const gate = workflow.indexOf('      - name: Wait for production delivery')

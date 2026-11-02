@@ -11,11 +11,14 @@ export function defaultModelChain(fusionEnabled = false) {
 }
 export function modelCandidates(selected, live = null, chain = preferredFreeModels) {
   const candidates = [...new Set(chain)]
-  if (!candidates.includes(selected)) return [selected]
+  const fusion = candidates.includes(fusionModel)
+  // Without Fusion, explicit non-chain models stay single-model.
+  if (!fusion && !candidates.includes(selected)) return [selected]
   const free = candidates.filter(model => preferredFreeModels.includes(model))
   const available = free.filter(model => !live || live.includes(model))
   const freeChain = available.length ? available : free
-  return [...new Set(selected === fusionModel ? [fusionModel, ...freeChain] : [selected, ...freeChain])]
+  // With a Fusion token, any picked model falls back to Fusion before the free chain.
+  return [...new Set(selected === fusionModel ? [fusionModel, ...freeChain] : [selected, ...(fusion ? [fusionModel] : []), ...freeChain])]
 }
 export function retryableProviderError(error) {
   if (!error || typeof error !== 'object') return false

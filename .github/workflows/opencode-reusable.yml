@@ -1067,8 +1067,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - name: Mark issue waiting for reply
+        if: success() && env.SSH_ONLY_REQUEST != 'true' && env.AWAITING_REPLY_ENDED == 'true'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          retries: 3
+          github-token: ${{ github.token }}
+          script: |
+            require(`${process.env.RUNTIME_DIR}/.github/scripts/github-rate-observer.cjs`).attach(github, process.env.OPENCODE_WEB_DIR);
+            const number = Number(process.env.TRIGGER_ISSUE_NUMBER);
+            const warn = (error) => core.warning(error.message);
+            await github.rest.issues.createComment({
+              owner: process.env.TARGET_OWNER, repo: process.env.TARGET_REPO, issue_number: number,
+              body: 'OpenCode asked a question and is waiting for your reply. The session ended; open the game on OmGithub and use Continue to answer.'
+            }).catch(warn);
+            for (const name of ['in progress', 'validating']) await github.rest.issues.removeLabel({
+              owner: process.env.TARGET_OWNER, repo: process.env.TARGET_REPO, issue_number: number, name
+            }).catch((error) => { if (error.status !== 404) warn(error); });
+
       - name: Mark issue complete
-        if: success() && env.SSH_ONLY_REQUEST != 'true'
+        if: success() && env.SSH_ONLY_REQUEST != 'true' && env.AWAITING_REPLY_ENDED != 'true'
         continue-on-error: true
         uses: actions/github-script@v7
         with:
@@ -1151,7 +1170,7 @@ jobs:
           fi
 
       - name: Keep temporary access available
-        if: (success() || (failure() && vars.OPENCODE_DEBUG_HOLD == 'true' && steps.opencode_web.outcome == 'success')) && env.TEST_REQUEST != 'true' && env.SSH_ONLY_REQUEST != 'true'
+        if: (success() || (failure() && vars.OPENCODE_DEBUG_HOLD == 'true' && steps.opencode_web.outcome == 'success')) && env.TEST_REQUEST != 'true' && env.SSH_ONLY_REQUEST != 'true' && env.AWAITING_REPLY_ENDED != 'true'
         shell: bash
         env:
           HOLD_SECONDS: ${{ job.status == 'failure' && '1800' || '18000' }}
@@ -1231,7 +1250,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OMGITHUB_ORIGIN: ${{ vars.OMGITHUB_ORIGIN || 'https://omgithub.com' }}
-          OUTCOME: ${{ job.status }}
+          # A session that ended while OpenCode waited for an answer is not a failed build.
+          OUTCOME: ${{ job.status == 'success' && env.AWAITING_REPLY_ENDED == 'true' && 'awaiting_reply' || job.status }}
         shell: bash
         run: |
           sequence=$(/usr/bin/time -p node -p 'Date.now()')

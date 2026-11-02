@@ -32,3 +32,16 @@ test('read bounded tails, tolerate missing startup logs, and construct terminal 
     assert.equal(payload.reason, overloadedMessage)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
+test('report the current delivery failure, not a stale free-limit error from an earlier model attempt', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'run-failure-'))
+  try {
+    writeFileSync(join(directory, 'opencode-run.log'), event({ type: 'provider.free-limit', status: 429 }))
+    writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify([{ model: 'a', code: 1 }, { model: 'b', code: 0 }]))
+    assert.match(readFailureReason(directory), /after the AI finished/)
+    writeFileSync(join(directory, 'delivery-failure.json'), JSON.stringify({ message: 'Production delivery timed out' }))
+    assert.match(readFailureReason(directory), /Publishing timed out/)
+    assert.doesNotMatch(failurePayload({ OPENCODE_WEB_DIR: directory, GITHUB_RUN_ID: '1' }).reason, /robot brains/)
+    writeFileSync(join(directory, 'delivery-failure.json'), JSON.stringify({ message: 'No generated index.html or supported package project.' }))
+    assert.match(readFailureReason(directory), /no playable game/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
