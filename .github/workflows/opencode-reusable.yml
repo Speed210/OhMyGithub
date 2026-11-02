@@ -634,11 +634,27 @@ jobs:
 
           /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
           if [[ -n "${FUSION_ACCESS_TOKEN:-}" ]]; then
-            /usr/bin/time -p jq --arg plugin 'git+https://github.com/OMGDemoPlayground/opencode-copilot-fusion.git#v0.1.0' \
-              '.plugins = (((.plugins // []) + [$plugin]) | unique)' \
-              "$HOME/.config/opencode/opencode.json" > "$config_tmp"
-            /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
-            echo 'Installed Copilot Fusion plugin from the pinned tag.'
+            plugin_repo='https://github.com/OMGDemoPlayground/opencode-copilot-fusion.git'
+            plugin_commit=''
+            for attempt in 1 2 3; do
+              plugin_commit="$(/usr/bin/time -p git ls-remote "$plugin_repo" refs/heads/main 2>/dev/null | awk '{print $1}' || true)"
+              [[ "$plugin_commit" =~ ^[a-f0-9]{40}$ ]] && break
+              plugin_commit=''
+              if [[ "$attempt" -lt 3 ]]; then /usr/bin/time -p sleep 2; fi
+            done
+            if [[ "$plugin_commit" =~ ^[a-f0-9]{40}$ ]]; then
+              printf 'FUSION_PLUGIN_COMMIT=%s\n' "$plugin_commit" >> "$GITHUB_ENV"
+              printf '%s\n' "$plugin_commit" > "$OPENCODE_WEB_DIR/fusion-plugin-commit.txt"
+              printf '[fusion-plugin] commit=%s\n' "$plugin_commit" >> "$OPENCODE_WEB_DIR/opencode-run.log"
+              /usr/bin/time -p jq --arg plugin "git+$plugin_repo#$plugin_commit" \
+                '.plugins = (((.plugins // []) + [$plugin]) | unique)' \
+                "$HOME/.config/opencode/opencode.json" > "$config_tmp"
+              /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
+              echo "Installed Copilot Fusion plugin from main commit $plugin_commit."
+            else
+              printf 'FUSION_PLUGIN_COMMIT=unavailable\n' >> "$GITHUB_ENV"
+              echo 'Could not resolve the Copilot Fusion main commit; keeping the free model chain.' >&2
+            fi
           fi
           PORTS="$(node --input-type=module -e '
             import net from "node:net";
@@ -789,7 +805,7 @@ jobs:
             // Free OpenCode models get retired (the API then answers "ModelDeprecated" and
             // OpenCode reports "Unexpected server error"). Pick a live default from the catalog.
             const { preferredFreeModels: preferred, modelCandidates, defaultModelChain } = await import(`${process.env.RUNTIME_DIR}/scripts/run-with-model-fallback.mjs`);
-            const fusionEnabled = Boolean(process.env.FUSION_ACCESS_TOKEN);
+            const fusionEnabled = /^[a-f0-9]{40}$/.test(String(process.env.FUSION_PLUGIN_COMMIT || ''));
             const chain = defaultModelChain(fusionEnabled);
             let live = null;
             try {
@@ -976,6 +992,9 @@ jobs:
                 ? ['⚠️ **AgentsWeb SSH tunnel setup failed.**', '', `Run: ${run}`, `SSH URL: \`${tunnelUrl}\``].join('\n')
                 : '');
             const body = [sshSection,
+              process.env.FUSION_ACCESS_TOKEN
+                ? `Fusion plugin: \`${/^[a-f0-9]{40}$/.test(String(process.env.FUSION_PLUGIN_COMMIT || '')) ? process.env.FUSION_PLUGIN_COMMIT : 'unavailable'}\``
+                : '',
               require(`${process.env.RUNTIME_DIR}/scripts/project-link.cjs`).projectLink(process.env),
               process.env.TEST_REQUEST === 'true'
                 ? 'This is a synthetic OpenCode session for the full workflow test.'
@@ -1025,7 +1044,7 @@ jobs:
             echo 'OpenCode response artifact is empty; refusing to create an incomplete release.' >&2
             exit 1
           fi
-          for artifact in "$OPENCODE_WEB_DIR"/*.log "$OPENCODE_WEB_DIR"/model-attempts.json "$OPENCODE_WEB_DIR"/main-model; do
+          for artifact in "$OPENCODE_WEB_DIR"/*.log "$OPENCODE_WEB_DIR"/model-attempts.json "$OPENCODE_WEB_DIR"/main-model "$OPENCODE_WEB_DIR"/fusion-plugin-commit.txt; do
             [[ -f "$artifact" && -s "$artifact" ]] || continue
             [[ "$(basename "$artifact")" == 'opencode.json' ]] && continue
             cp -f "$artifact" "$release_dir/"
