@@ -27,6 +27,8 @@ export function buildStats(directory, now = Date.now()) {
     const work = attempts.map(attempt => Number(attempt?.duration_ms)).filter(ms => Number.isFinite(ms) && ms >= 0)
     if (work.length) stats.opencode_ms = Math.round(work.reduce((sum, ms) => sum + ms, 0))
   }
+  const oc = readJson(directory, 'opencode-stats.json')
+  if (oc && typeof oc === 'object') stats.opencode_stats = Object.fromEntries(Object.entries(oc).filter(([key, value]) => key === 'tools' ? value && typeof value === 'object' : Number.isFinite(value)))
   const started = Number(readText(directory, 'build-started-at'))
   if (Number.isFinite(started) && started > 0 && now >= started) stats.duration_ms = now - started
   return stats

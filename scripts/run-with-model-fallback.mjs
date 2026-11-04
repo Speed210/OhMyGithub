@@ -1,4 +1,5 @@
 import { createV2Client, finishedV2Message } from './opencode-v2-api.mjs'
+import { collectSessionStats, finishStats } from './opencode-stats.mjs'
 import { spawn } from 'node:child_process'
 import { appendFileSync, openSync, writeSync, closeSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -35,6 +36,23 @@ export function attemptErrorClass(error) {
   if (status === 429 || type === 'provider.rate-limit' || /rate.limit|\b429\b/i.test(message)) return 'rate-limit'
   if ([401, 403].includes(status) || /^provider\.auth|unauthori[sz]ed|forbidden|invalid api key/i.test(type + ' ' + message)) return 'auth'
   return 'other'
+}
+// One numbers-only read of the session (and subagents) after each attempt; saved for
+// build stats and posted to /telemetry in the v1 `stats` shape. Never throws.
+export async function reportSessionStats({ api, sessionID, directory, env = process.env, attempts = [], request = fetch }) {
+  if (!api || !/^ses_[A-Za-z0-9]+$/.test(sessionID || '')) return null
+  try {
+    const opencode_ms = attempts.reduce((sum, a) => sum + (Number.isFinite(a?.duration_ms) ? a.duration_ms : 0), 0)
+    const stats = finishStats(await collectSessionStats(api, sessionID), { chat_runtime_seconds: Math.round(opencode_ms / 1000) })
+    writeFileSync(join(directory, 'opencode-stats.json'), JSON.stringify(stats))
+    if (env.OMGITHUB_CALLBACK_TOKEN && env.GITHUB_REPOSITORY && env.TRIGGER_ISSUE_NUMBER && env.GITHUB_RUN_ID) {
+      await request(`${env.OMGITHUB_ORIGIN || 'https://omgithub.com'}/api/github/${env.GITHUB_REPOSITORY}/issues/${env.TRIGGER_ISSUE_NUMBER}/telemetry`, {
+        method: 'POST', headers: { authorization: `Bearer ${env.OMGITHUB_CALLBACK_TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ run: env.GITHUB_RUN_ID, attempt: Number(env.GITHUB_RUN_ATTEMPT || 1), observed_at: new Date().toISOString(), stats }),
+        signal: AbortSignal.timeout(10000) }).catch(() => {})
+    }
+    return stats
+  } catch { return null }
 }
 // Best-effort nudge so the lifecycle posts build stats now, not at the next 30 s tick.
 export function pingHeartbeat(env = process.env) {
@@ -118,6 +136,7 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
       const retryable = outcome !== 'interrupted' && (retryableProviderError(failure) || fusionFallbackError(model, failure))
       attempts.push({ model, cli_code: cliCode, outcome: outcome || 'unverified', code, retryable, error_class: code === 0 ? null : attemptErrorClass(failure) || (outcome === 'interrupted' ? null : 'other'), duration_ms: Date.now() - started })
       writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify(attempts))
+      await reportSessionStats({ api, sessionID, directory, env, attempts })
       await pingHeartbeat(env)
       appendFileSync(logFile, `[timing] model ${model}: ${Date.now() - started} ms; cli exit ${cliCode}; terminal ${outcome || 'unverified'}; exit ${code}\n`)
       if (code === 0 || interrupted || !retryable) break

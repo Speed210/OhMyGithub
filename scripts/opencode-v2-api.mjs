@@ -40,6 +40,7 @@ export function createV2Client({ base, password, request = fetch }) {
     pair: () => call('/api/pair', { method: 'POST', body: {} }),
     async session(id) { return (await call(pathFor(id))).data },
     async messages(id) { return (await call(pathFor(id, '/message'))).data },
+    async children(id) { return (await call(pathFor(id, '/children'))).data },
     async active() { return (await call('/api/session/active')).data },
     async export(id) {
       if (!idPattern.test(id)) throw new Error('Invalid session ID')
