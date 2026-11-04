@@ -22,6 +22,10 @@ export function buildStats(directory, now = Date.now()) {
     stats.attempts = attempts.slice(-MAX_ATTEMPTS).map(({ model, outcome, code, error_class, duration_ms }) => ({ model, outcome, code, ...(error_class ? { error_class } : {}), duration_ms }))
     const done = attempts.findLast(attempt => attempt?.code === 0)
     if (done?.model) stats.final_model = done.model
+    // OpenCode's own working time: wall time of each `opencode run` attempt (spawn to exit + terminal check).
+    // Unlike duration_ms it excludes runner setup and the post-build access hold (up to 5 h on success).
+    const work = attempts.map(attempt => Number(attempt?.duration_ms)).filter(ms => Number.isFinite(ms) && ms >= 0)
+    if (work.length) stats.opencode_ms = Math.round(work.reduce((sum, ms) => sum + ms, 0))
   }
   const started = Number(readText(directory, 'build-started-at'))
   if (Number.isFinite(started) && started > 0 && now >= started) stats.duration_ms = now - started

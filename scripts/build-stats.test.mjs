@@ -24,6 +24,7 @@ test('build stats read WARP status, current and final model, capped attempts and
   assert.equal(stats.attempts[0].error_class, 'free-limit')
   assert.equal(stats.attempts.at(-1).error_class, undefined)
   assert.equal(stats.duration_ms, 60000)
+  assert.equal(stats.opencode_ms, 50) // sum of every attempt, not the capped 8
   const payload = failurePayload({ GITHUB_RUN_ID: '9', OPENCODE_WEB_DIR: dir }, 5)
   assert.equal(payload.outcome, 'failure'); assert.equal(payload.final_model, 'opencode/glm-5.3-flash-free')
 })
