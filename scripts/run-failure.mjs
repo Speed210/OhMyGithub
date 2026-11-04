@@ -1,6 +1,7 @@
 import { openSync, fstatSync, readSync, closeSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { buildStats } from './build-stats.mjs'
 
 // Report actionable categories, not arbitrary provider bodies or user/tool text.
 export function modelFailureReason(log) {
@@ -42,7 +43,7 @@ export function readFailureReason(directory) {
   finally { if (fd !== undefined) closeSync(fd) }
 }
 export function failurePayload(env, sequence = Date.now()) {
-  return { run: String(env.GITHUB_RUN_ID), attempt: Number(env.GITHUB_RUN_ATTEMPT || 1), sequence: Number(sequence), state: 'ended', phase: 'building', outcome: 'failure', reason: readFailureReason(env.OPENCODE_WEB_DIR) }
+  return { run: String(env.GITHUB_RUN_ID), attempt: Number(env.GITHUB_RUN_ATTEMPT || 1), sequence: Number(sequence), state: 'ended', phase: 'building', outcome: 'failure', reason: readFailureReason(env.OPENCODE_WEB_DIR), ...buildStats(env.OPENCODE_WEB_DIR) }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   console.log(process.argv[2] === '--payload' ? JSON.stringify(failurePayload(process.env, process.argv[3])) : readFailureReason(process.env.OPENCODE_WEB_DIR))

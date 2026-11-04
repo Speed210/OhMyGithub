@@ -27,6 +27,21 @@ export function retryableProviderError(error) {
   return [429, 500, 502, 503, 504].includes(Number(error.status)) || ['provider.free-limit', 'provider.rate-limit', 'provider.overloaded', 'provider.model-not-found'].includes(type) ||
     /FreeUsageLimit|ModelDeprecated|model.*(?:not found|unavailable|deprecated)|free usage limit|rate.limit/i.test(message)
 }
+// Coarse class for admin stats; null when the attempt reported no error.
+export function attemptErrorClass(error) {
+  if (!error || typeof error !== 'object') return null
+  const status = Number(error.status), type = String(error.type || ''), message = String(error.message || '')
+  if (type === 'provider.free-limit' || /FreeUsageLimit|free usage limit/i.test(message)) return 'free-limit'
+  if (status === 429 || type === 'provider.rate-limit' || /rate.limit|\b429\b/i.test(message)) return 'rate-limit'
+  if ([401, 403].includes(status) || /^provider\.auth|unauthori[sz]ed|forbidden|invalid api key/i.test(type + ' ' + message)) return 'auth'
+  return 'other'
+}
+// Best-effort nudge so the lifecycle posts build stats now, not at the next 30 s tick.
+export function pingHeartbeat(env = process.env) {
+  const port = Number(env.OPENCODE_CONTROL_PORT)
+  if (!Number.isInteger(port) || port < 1) return Promise.resolve()
+  return fetch(`http://127.0.0.1:${port}/omgithub/heartbeat`, { signal: AbortSignal.timeout(3000) }).then(() => {}, () => {})
+}
 export function fusionFallbackError(model, error) {
   if (model !== fusionModel || !error || typeof error !== 'object') return false
   const status = Number(error.status), type = String(error.type || ''), message = String(error.message || '')
@@ -66,6 +81,7 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
       if (interrupted) break
       const started = Date.now()
       writeFileSync(join(directory, 'main-model'), model + '\n')
+      void pingHeartbeat(env)
       appendFileSync(logFile, `[model-fallback] Trying ${model}\n`)
       const fd = openSync(logFile, 'a')
       let failure, observedSession = false, pending = { out: '', err: '' }
@@ -100,8 +116,9 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
       }
       else if (outcome === 'failed' || outcome === 'interrupted' || code === 0 && (failure || api)) code = 1
       const retryable = outcome !== 'interrupted' && (retryableProviderError(failure) || fusionFallbackError(model, failure))
-      attempts.push({ model, cli_code: cliCode, outcome: outcome || 'unverified', code, retryable, duration_ms: Date.now() - started })
+      attempts.push({ model, cli_code: cliCode, outcome: outcome || 'unverified', code, retryable, error_class: code === 0 ? null : attemptErrorClass(failure) || (outcome === 'interrupted' ? null : 'other'), duration_ms: Date.now() - started })
       writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify(attempts))
+      await pingHeartbeat(env)
       appendFileSync(logFile, `[timing] model ${model}: ${Date.now() - started} ms; cli exit ${cliCode}; terminal ${outcome || 'unverified'}; exit ${code}\n`)
       if (code === 0 || interrupted || !retryable) break
       if (model !== candidates.at(-1)) appendFileSync(logFile, '[model-fallback] Provider/model unavailable; advancing to the next candidate in the same session.\n')

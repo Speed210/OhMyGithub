@@ -1,4 +1,5 @@
 import { readyPublicUrls } from './public-readiness.mjs'
+import { buildStats } from './build-stats.mjs'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -14,6 +15,7 @@ export async function registerRun(env, state, check) {
     urls: { opencode: session && web ? `${web}/omgithub/connect` : '',
       files: read('files-url'), preview,
       branch: `https://github.com/${env.GITHUB_REPOSITORY}/tree/opencode-checkpoints/${env.TRIGGER_ISSUE_NUMBER}` } }
+  Object.assign(body, buildStats(directory))
   const resume = read('resume-status.json')
   if (resume) { const status = JSON.parse(resume).status; if (['fresh', 'restored'].includes(status)) body.resume_status = status }
   const expected = body.urls

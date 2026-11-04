@@ -87,7 +87,7 @@ probe_model() {
     rc=$?
     if grep -q '"type":"text"' "$out"; then log "model probe: $model answered through WARP"; return 0; fi
     if grep -Eqi 'FreeUsageLimit|free usage limit|"status":429|\b429\b|rate.?limit' "$out"; then
-      log "model probe: $model rate limited (429) on this WARP exit"; return 2
+      log "model probe: $model rate limited (429) on this WARP exit"; return 4
     fi
     if grep -Eqi 'ModelDeprecated|model.{0,40}(not found|unavailable|deprecated)|ProviderModelNotFound' "$out"; then
       log "model probe: $model unavailable, trying the next free model"; continue
@@ -98,6 +98,13 @@ probe_model() {
   return 3
 }
 
+# Admin stats (no secrets): last attempt, /48 egress prefix, colo, and whether
+# every exit that reached the probe was rate limited (429) vs a setup error.
+probed=0; limited=0; last_prefix=''; last_colo=''
+write_status() {
+  printf '{"result":"%s","attempt":%s,"egress_prefix":"%s","colo":"%s","probed":%s,"rate_limited":%s}\n' \
+    "$1" "${attempt:-0}" "$last_prefix" "$last_colo" "$probed" "$limited" > "$work/status.json" 2>/dev/null || true
+}
 for attempt in $(seq 1 "$MAX_REGISTRATIONS"); do
   stop_proxy
   reg="$work/reg-$attempt"; rm -rf "$reg"; mkdir -p "$reg"
@@ -135,15 +142,21 @@ for attempt in $(seq 1 "$MAX_REGISTRATIONS"); do
   if [[ "$egress" != "$EGRESS_PREFIX"* ]]; then
     log "attempt $attempt: unexpected WARP egress '${egress:-none}' (want ${EGRESS_PREFIX}*): $(tail -n 2 "$work/wireproxy.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"; continue
   fi
-  log "attempt $attempt: WARP egress $egress ($(printf '%s\n' "$trace" | sed -n 's/^colo=//p'))"
+  last_colo="$(printf '%s\n' "$trace" | sed -n 's/^colo=//p' | tr -cd 'A-Z' | cut -c1-3)"
+  last_prefix="$(printf '%s' "$egress" | awk -F: 'NF>3 {print $1":"$2":"$3"::/48"}' | tr -cd '0-9a-fA-F:/')"
+  log "attempt $attempt: WARP egress $egress ($last_colo)"
   probe_model "$proxy"; rc=$?
+  [[ "$rc" != 3 ]] && probed=$((probed + 1))
+  [[ "$rc" == 4 ]] && limited=$((limited + 1))
   if [[ "$rc" == 0 || "$rc" == 3 ]]; then
     [[ "$rc" == 3 ]] && log 'model probe: no probe model available; keeping the verified WARP egress'
     printf '%s\n' "$egress" > "$work/egress"
+    write_status ok
     printf '%s\n' "$proxy"
     exit 0
   fi
 done
 stop_proxy
+if (( probed > 0 && limited == probed )); then write_status 429_fallback; else write_status setup_failed; fi
 log "WARP setup failed after $MAX_REGISTRATIONS registrations"
 exit 1
