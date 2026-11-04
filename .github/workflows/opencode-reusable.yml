@@ -90,6 +90,7 @@ jobs:
       RALPH_REQUEST: ${{ contains(inputs.labels_json, '"ralph"') }}
       OMO_REQUEST: ${{ contains(inputs.labels_json, '"omo"') }}
       SSH_ONLY_REQUEST: ${{ contains(inputs.labels_json, '"ssh"') }}
+      WARP_REQUEST: ${{ contains(inputs.labels_json, '"warp"') }}
       VALIDATION_ENABLED: ${{ vars.VALIDATION_ENABLED || 'true' }}
     steps:
       - name: Record job start time
@@ -681,9 +682,32 @@ jobs:
           printf '%s %s %s\n' "$OPENCODE_WEB_PORT" "$PROJECT_FILE_PORT" "$OPENCODE_CONTROL_PORT" > "$OPENCODE_WEB_DIR/controller-ports"
           echo "Allocated OpenCode port: $OPENCODE_WEB_PORT"
           echo "Allocated project file server port: $PROJECT_FILE_PORT"
+          WARP_PROXY=''
+          if [[ "$WARP_REQUEST" == 'true' ]]; then
+            # Settings > Enable WARP: free models through Cloudflare WARP IPv6.
+            # Only `opencode serve` gets the proxy; GitHub stays on the runner IP.
+            if WARP_PROXY="$(bash "$RUNTIME_DIR/scripts/warp-proxy.sh" "$RUNNER_TEMP/warp" "$OPENCODE_BIN" | tail -n 1)" \
+              && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
+              echo "WARP proxy ready: egress $(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)"
+              echo "- WARP: on, egress \`$(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              WARP_PROXY=''
+              echo "::warning title=WARP unavailable::WARP setup failed; OpenCode uses the runner network."
+              echo "- WARP: requested but unavailable; used the runner network" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          if [[ -n "$WARP_PROXY" ]]; then
+            WARP_NO_PROXY='localhost,127.0.0.1,::1,github.com,.github.com,githubusercontent.com,.githubusercontent.com,githubcopilot.com,.githubcopilot.com'
+            nohup env HTTPS_PROXY="$WARP_PROXY" HTTP_PROXY="$WARP_PROXY" https_proxy="$WARP_PROXY" http_proxy="$WARP_PROXY" \
+              NO_PROXY="$WARP_NO_PROXY" no_proxy="$WARP_NO_PROXY" \
+              "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$OPENCODE_WEB_PORT" \
+              > "$OPENCODE_WEB_DIR/opencode.log" 2>&1 &
+            echo $! > "$OPENCODE_WEB_DIR/opencode.pid"
+          else
           nohup "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$OPENCODE_WEB_PORT" \
             > "$OPENCODE_WEB_DIR/opencode.log" 2>&1 &
           echo $! > "$OPENCODE_WEB_DIR/opencode.pid"
+          fi
           wait_for_http() {
             local url="$1"
             local attempts="$2"
