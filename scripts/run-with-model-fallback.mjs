@@ -4,21 +4,22 @@ import { appendFileSync, openSync, writeSync, closeSync, readFileSync, writeFile
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const fusionModel = 'copilot-fusion-direct/fusion'
-export const preferredFreeModels = ['opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'opencode/mimo-v2.6-flash-free', 'opencode/big-pickle']
+// Single source of truth for the default order: scripts/model-chain.json.
+const modelChain = JSON.parse(readFileSync(new URL('./model-chain.json', import.meta.url), 'utf8'))
+export const fusionModel = modelChain.fusion
+export const fullModelChain = modelChain.chain
+export const openrouterFallbackModel = modelChain.openrouterFallback
+export const preferredFreeModels = fullModelChain.filter(model => model !== fusionModel)
 export function defaultModelChain(fusionEnabled = false) {
-  return [...(fusionEnabled ? [fusionModel] : []), ...preferredFreeModels]
+  return fullModelChain.filter(model => fusionEnabled || model !== fusionModel)
 }
-export function modelCandidates(selected, live = null, chain = preferredFreeModels) {
-  const candidates = [...new Set(chain)]
-  const fusion = candidates.includes(fusionModel)
-  // Without Fusion, explicit non-chain models stay single-model.
-  if (!fusion && !candidates.includes(selected)) return [selected]
-  const free = candidates.filter(model => preferredFreeModels.includes(model))
-  const available = free.filter(model => !live || live.includes(model))
-  const freeChain = available.length ? available : free
-  // With a Fusion token, any picked model falls back to Fusion before the free chain.
-  return [...new Set(selected === fusionModel ? [fusionModel, ...freeChain] : [selected, ...(fusion ? [fusionModel] : []), ...freeChain])]
+// Picked model first, then the whole default chain (Fusion in its slot when on), deduplicated.
+// Retired free models (absent from the live catalog) are skipped unless none are left.
+export function modelCandidates(selected, live = null, chain = defaultModelChain(false)) {
+  const ordered = [...new Set(chain)]
+  const liveOnly = ordered.filter(model => !live || !preferredFreeModels.includes(model) || live.includes(model))
+  const rest = liveOnly.some(model => preferredFreeModels.includes(model)) ? liveOnly : ordered
+  return [...new Set([selected, ...rest].filter(Boolean))]
 }
 export function retryableProviderError(error) {
   if (!error || typeof error !== 'object') return false
@@ -54,7 +55,7 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   const candidates = [...new Set(models)]
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
   // Preserve the existing connected OpenRouter fallback after the free-model chain.
-  if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes('openrouter/cohere/north-mini-code:free')) candidates.push('openrouter/cohere/north-mini-code:free')
+  if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes(openrouterFallbackModel)) candidates.push(openrouterFallbackModel)
   let sessionID = env.RESUME_SESSION_ID || '', child, interrupted = false, code = 1
   const attempts = []
   const stop = signal => { interrupted = true; child?.kill(signal) }

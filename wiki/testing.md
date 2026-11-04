@@ -406,7 +406,7 @@ Print a bounded, categorized reason in the failed Actions step and include that 
 
 ## Verify sequential free-model fallback
 
-Try the preferred live free models in order: `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`, `mimo-v2.6-flash-free`, then `big-pickle`. Keep an explicitly selected preferred model first. Skip known unavailable catalog entries; retain the preferred list when discovery fails. Keep explicit non-free selections unchanged.
+Default order lives in `scripts/model-chain.json`: `deepseek-v4.1-flash-free`, Fusion (only with a Copilot Fusion token), `glm-5.3-flash-free`, `mimo-v2.6-flash-free`, then `big-pickle`. A picked model (free, paid, or Fusion) runs first, then the full default chain, deduplicated. Skip known unavailable catalog free models; retain the list when discovery fails or none are live.
 
 Advance on structured quota, rate-limit, model-unavailable, or transient provider-server failures. Preserve the current session and exact request. Stop on success, cancellation, credential rejection, or unrelated execution errors. Write the terminal exit marker only after the sequence finishes. Keep the connected OpenRouter fallback after the free chain when configured. Inspect `main-model`, `model-attempts.json`, and `opencode-run.log` on the worker. Run `node --test scripts/run-with-model-fallback.test.mjs` to verify ordered fallback, early success, exhaustion, restored sessions, zero-exit error events, and exact prompt preservation.
 

@@ -5,19 +5,27 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runModels, modelCandidates, preferredFreeModels, retryableProviderError, terminalAttemptOutcome, defaultModelChain, fusionFallbackError, fusionModel } from './run-with-model-fallback.mjs'
 
-test('order preferred free candidates and preserve explicitly chosen non-free models', () => {
-  assert.deepEqual(modelCandidates(preferredFreeModels[0]), preferredFreeModels)
-  assert.deepEqual(modelCandidates(preferredFreeModels[1]), [preferredFreeModels[1], preferredFreeModels[0], ...preferredFreeModels.slice(2)])
-  assert.deepEqual(modelCandidates(preferredFreeModels[0], [preferredFreeModels[0], preferredFreeModels[3]]), [preferredFreeModels[0], preferredFreeModels[3]])
-  assert.deepEqual(modelCandidates('openai/gpt-6-astra'), ['openai/gpt-6-astra'])
-  const chain = defaultModelChain(true)
-  assert.deepEqual(chain, [fusionModel, ...preferredFreeModels])
+test('default chain order comes from model-chain.json; picked models fall back to it', () => {
+  const [deepseek, glm, mimo, pickle] = preferredFreeModels
+  assert.deepEqual(JSON.parse(readFileSync(new URL('./model-chain.json', import.meta.url), 'utf8')).chain, [deepseek, fusionModel, glm, mimo, pickle])
+  assert.deepEqual(preferredFreeModels, ['opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'opencode/mimo-v2.6-flash-free', 'opencode/big-pickle'])
+  // Without Fusion
   assert.deepEqual(defaultModelChain(false), preferredFreeModels)
-  assert.deepEqual(modelCandidates(fusionModel, null, chain), chain)
-  assert.deepEqual(modelCandidates(preferredFreeModels[1], null, chain), [preferredFreeModels[1], fusionModel, preferredFreeModels[0], ...preferredFreeModels.slice(2)])
-  assert.deepEqual(modelCandidates('openai/gpt-6-astra', null, chain), ['openai/gpt-6-astra', fusionModel, ...preferredFreeModels])
-  assert.deepEqual(modelCandidates(preferredFreeModels[0], [preferredFreeModels[0], preferredFreeModels[2]], chain), [preferredFreeModels[0], fusionModel, preferredFreeModels[2]])
-  assert.deepEqual(modelCandidates(fusionModel, null, preferredFreeModels), [fusionModel])
+  assert.deepEqual(modelCandidates(deepseek), preferredFreeModels)
+  assert.deepEqual(modelCandidates(glm), [glm, deepseek, mimo, pickle])
+  assert.deepEqual(modelCandidates(deepseek, [deepseek, pickle]), [deepseek, pickle])
+  assert.deepEqual(modelCandidates('openai/gpt-6-astra'), ['openai/gpt-6-astra', ...preferredFreeModels], 'hand-picked models fall back to the default chain')
+  assert.deepEqual(modelCandidates('opencode/beam-free', ['opencode/beam-free', glm]), ['opencode/beam-free', glm])
+  assert.deepEqual(modelCandidates(deepseek, ['opencode/other-free']), preferredFreeModels, 'none live: keep the list')
+  // With Fusion: DeepSeek first, Fusion second
+  const chain = defaultModelChain(true)
+  assert.deepEqual(chain, [deepseek, fusionModel, glm, mimo, pickle])
+  assert.deepEqual(modelCandidates(chain[0], null, chain), chain)
+  assert.deepEqual(modelCandidates(fusionModel, null, chain), [fusionModel, deepseek, glm, mimo, pickle])
+  assert.deepEqual(modelCandidates(glm, null, chain), [glm, deepseek, fusionModel, mimo, pickle])
+  assert.deepEqual(modelCandidates('openai/gpt-6-astra', null, chain), ['openai/gpt-6-astra', ...chain])
+  assert.deepEqual(modelCandidates(deepseek, [deepseek, mimo], chain), [deepseek, fusionModel, mimo])
+  assert.deepEqual(modelCandidates(fusionModel, null, preferredFreeModels), [fusionModel, ...preferredFreeModels])
 })
 test('only retry structured provider/model availability failures', () => {
   for (const error of [{ type: 'provider.free-limit' }, { status: 429 }, { status: 503 }, { message: 'ModelDeprecated' }]) assert.equal(retryableProviderError(error), true)
@@ -78,11 +86,20 @@ test('stop immediately on success or unrelated failure; use connected fallback o
     assert.equal(result.attempts.at(-1).model, 'openrouter/cohere/north-mini-code:free')
   } finally { f.close() }
 })
-test('try Fusion first and advance to the free chain on its auth failure', async () => {
+test('Default with Fusion tries DeepSeek first, then Fusion', async () => {
+  const f = await fixture(['quota', 'success'])
+  try {
+    const chain = defaultModelChain(true)
+    const result = await runModels({ ...f.options, selected: chain[0], models: modelCandidates(chain[0], null, chain) })
+    assert.equal(result.code, 0)
+    assert.deepEqual(result.attempts.map(row => row.model), [preferredFreeModels[0], fusionModel])
+  } finally { f.close() }
+})
+test('a picked Fusion advances to the free chain on its auth failure', async () => {
   const f = await fixture(['fusion-auth', 'success'])
   try {
     const chain = defaultModelChain(true)
-    const result = await runModels({ ...f.options, selected: fusionModel, models: chain })
+    const result = await runModels({ ...f.options, selected: fusionModel, models: modelCandidates(fusionModel, null, chain) })
     assert.equal(result.code, 0)
     assert.deepEqual(result.attempts.map(row => row.model), [fusionModel, preferredFreeModels[0]])
     assert.equal(result.attempts[0].retryable, true)
