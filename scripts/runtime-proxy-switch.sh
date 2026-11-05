@@ -20,7 +20,7 @@ if [[ $rc -eq 0 && "$result" == proxy_ok && "$proxy" == http://127.0.0.1:* ]]; t
   if ! bash "$here/start-opencode-serve.sh" "$proxy" --wait; then
     result=proxy_error
     bash "$here/start-opencode-serve.sh" "$previous" --wait || true
-  else switched=0; fi
+  else switched=0; printf '%s\n' "$previous" > "$OPENCODE_WEB_DIR/opencode-proxy.fallback"; fi
 fi
 PROXY_RESULT="$result" node -e 'const fs=require("fs"),f=process.env.OPENCODE_WEB_DIR+"/warp-status.json";let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}
 fs.writeFileSync(f,JSON.stringify({...s,proxy:process.env.PROXY_RESULT,switched_at:"runtime"}))' 2>/dev/null || true

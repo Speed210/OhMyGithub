@@ -28,10 +28,16 @@ export function retryableProviderError(error) {
   return [429, 500, 502, 503, 504].includes(Number(error.status)) || ['provider.free-limit', 'provider.rate-limit', 'provider.overloaded', 'provider.model-not-found'].includes(type) ||
     /FreeUsageLimit|ModelDeprecated|model.*(?:not found|unavailable|deprecated)|free usage limit|rate.limit/i.test(message)
 }
+// The local proxy relay (WARP wireproxy or DataImpulse) could not open a tunnel,
+// e.g. DataImpulse 407 TRAFFIC_EXHAUSTED surfaced as `502 Upstream Proxy Error`.
+export function proxyTunnelError(error) {
+  return !!error && typeof error === 'object' && /ERR_PROXY_TUNNEL|Proxy refused to open a tunnel|Upstream Proxy Error|TRAFFIC_EXHAUSTED/i.test(String(error.message || ''))
+}
 // Coarse class for admin stats; null when the attempt reported no error.
 export function attemptErrorClass(error) {
   if (!error || typeof error !== 'object') return null
   const status = Number(error.status), type = String(error.type || ''), message = String(error.message || '')
+  if (proxyTunnelError(error)) return 'proxy'
   if (type === 'provider.free-limit' || /FreeUsageLimit|free usage limit/i.test(message)) return 'free-limit'
   if (status === 429 || type === 'provider.rate-limit' || /rate.limit|\b429\b/i.test(message)) return 'rate-limit'
   if ([401, 403].includes(status) || /^provider\.auth|unauthori[sz]ed|forbidden|invalid api key/i.test(type + ' ' + message)) return 'auth'
@@ -100,7 +106,22 @@ export function runtimeProxySwitch({ env = process.env, binary, logFile }) {
     child.on('close', status => { closeSync(fd); done(status === 0) })
   })
 }
-export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, switchProxy = runtimeProxySwitch({ env, binary, logFile }) }) {
+// Dead proxy: restart `opencode serve` without it (back to WARP after a runtime switch,
+// otherwise the runner network) instead of letting every model fail through it.
+export function proxyDrop({ env = process.env, binary, logFile }) {
+  const web = env.OPENCODE_WEB_DIR
+  let current = ''
+  try { current = readFileSync(join(web, 'opencode-proxy'), 'utf8').trim() } catch {}
+  if (!web || !current) return null
+  const script = join(dirname(fileURLToPath(import.meta.url)), 'drop-proxy.sh')
+  return () => new Promise(done => {
+    const fd = openSync(logFile, 'a')
+    const child = spawn('bash', [script], { cwd: env.PROJECT_DIR, env: { ...env, OPENCODE_BIN: binary }, stdio: ['ignore', 'ignore', fd] })
+    child.on('error', () => { closeSync(fd); done(false) })
+    child.on('close', status => { closeSync(fd); done(status === 0) })
+  })
+}
+export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, switchProxy = runtimeProxySwitch({ env, binary, logFile }), dropProxy }) {
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const candidates = [...new Set(models)]
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
@@ -108,7 +129,7 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes(openrouterFallbackModel)) candidates.push(openrouterFallbackModel)
   let sessionID = env.RESUME_SESSION_ID || '', child, interrupted = false, code = 1
   const attempts = []
-  let switched = false
+  let switched = false, dropped = false
   const stop = signal => { interrupted = true; child?.kill(signal) }
   const onTerm = () => stop('SIGTERM'), onInt = () => stop('SIGINT')
   process.on('SIGTERM', onTerm); process.on('SIGINT', onInt)
@@ -158,6 +179,15 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
       await reportSessionStats({ api, sessionID, directory, env, attempts })
       await pingHeartbeat(env)
       appendFileSync(logFile, `[timing] model ${model}: ${Date.now() - started} ms; cli exit ${cliCode}; terminal ${outcome || 'unverified'}; exit ${code}\n`)
+      if (code !== 0 && !interrupted && !dropped && proxyTunnelError(failure)) {
+        dropped = true; switched = true
+        const drop = dropProxy === undefined ? proxyDrop({ env, binary, logFile }) : dropProxy
+        appendFileSync(logFile, '[model-fallback] The proxy refused to open tunnels; restarting OpenCode without it.\n')
+        const ok = drop ? await drop().catch(() => false) : false
+        attempts.at(-1).proxy_drop = ok ? 'ok' : 'failed'
+        writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify(attempts))
+        if (ok) { appendFileSync(logFile, `[model-fallback] Proxy dropped; retrying ${model}.\n`); index--; continue }
+      }
       if (code === 0 || interrupted || !retryable) break
       if (!switched && switchProxy && freeEgressModel(model) && attempts.at(-1).error_class === 'free-limit') {
         switched = true

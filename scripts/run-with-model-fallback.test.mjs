@@ -44,7 +44,7 @@ const fs=require('node:fs'),p=require('node:path'),args=process.argv.slice(2),f=
 const calls=fs.existsSync(f)?JSON.parse(fs.readFileSync(f)):[];calls.push(args);fs.writeFileSync(f,JSON.stringify(calls));
 const outcome=JSON.parse(process.env.PATTERN)[calls.length-1]||'success';
 console.log(JSON.stringify({type:'step_start',sessionID:'ses_main'}));
-if(outcome!=='success')console.log(JSON.stringify({type:'error',sessionID:'ses_main',error:outcome==='fatal'?{type:'tool.error',message:'Build failed'}:outcome==='fusion-auth'?{type:'provider.auth',status:401,message:'Copilot /auto returned HTTP 401'}:{type:'provider.free-limit',status:429}}));
+if(outcome!=='success')console.log(JSON.stringify({type:'error',sessionID:'ses_main',error:outcome==='fatal'?{type:'tool.error',message:'Build failed'}:outcome==='proxy'?{type:'provider.transport',message:'ERR_PROXY_TUNNEL: Proxy refused to open a tunnel: 502 Upstream Proxy Error'}:outcome==='fusion-auth'?{type:'provider.auth',status:401,message:'Copilot /auto returned HTTP 401'}:{type:'provider.free-limit',status:429}}));
 process.exit(outcome==='success'||outcome==='zero-error'?0:1);
 `, { mode: 0o755 })
   return { directory, prompt, options: { binary, port: 4096, promptFile: join(directory, 'prompt'), logFile: join(directory, 'run.log'), exitFile: join(directory, 'run.exit'), selected: preferredFreeModels[0], models: preferredFreeModels,
@@ -175,4 +175,27 @@ test('runtime switch: not for Fusion, non-free failures, or when WARP was not ok
   const { runtimeProxySwitch } = await import('./run-with-model-fallback.mjs')
   assert.equal(runtimeProxySwitch({ env: {}, binary: 'oc', logFile: '/dev/null' }), null)
   assert.equal(typeof runtimeProxySwitch({ env: { WARP_RUNTIME_SWITCH: '1' }, binary: 'oc', logFile: '/dev/null' }), 'function')
+})
+test('dead proxy (502 Upstream Proxy Error / TRAFFIC_EXHAUSTED) drops the proxy once and retries the same model', async () => {
+  const { proxyTunnelError, attemptErrorClass } = await import('./run-with-model-fallback.mjs')
+  const error = { type: 'provider.transport', message: 'ERR_PROXY_TUNNEL: Proxy refused to open a tunnel: 502 Upstream Proxy Error' }
+  assert.equal(proxyTunnelError(error), true)
+  assert.equal(attemptErrorClass(error), 'proxy')
+  assert.equal(proxyTunnelError({ message: 'Build failed' }), false)
+  const f = await fixture(['proxy', 'success'])
+  try {
+    let drops = 0, switches = 0
+    const result = await runModels({ ...f.options, dropProxy: async () => { drops++; return true }, switchProxy: async () => { switches++; return true } })
+    assert.equal(drops, 1)
+    assert.equal(switches, 0, 'never switch back onto a proxy after dropping one')
+    assert.equal(result.attempts[0].proxy_drop, 'ok')
+    assert.equal(result.attempts[0].error_class, 'proxy')
+    assert.equal(result.code, 0)
+    assert.deepEqual(result.attempts.map(row => row.model), [preferredFreeModels[0], preferredFreeModels[0]])
+  } finally { f.close() }
+  const g = await fixture(['proxy'])
+  try {
+    const result = await runModels({ ...g.options, dropProxy: null })
+    assert.equal(result.attempts.length, 1, 'no proxy to drop: stop as before')
+  } finally { g.close() }
 })

@@ -9,9 +9,9 @@ import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 
-export function createRelay({ host, port, user, password, connectUpstream = connect }) {
+export function createRelay({ host, port, user, password, connectUpstream = connect, onFailure = () => {} }) {
   const auth = 'Basic ' + Buffer.from(`${user}:${password}`).toString('base64')
-  const totals = { up: 0, down: 0, tunnels: 0, failed: 0 }
+  const totals = { up: 0, down: 0, tunnels: 0, failed: 0, last_error: '' }
   const server = createServer((req, res) => { res.writeHead(405, { connection: 'close' }); res.end() })
   server.on('connect', (req, client, head) => {
     const target = String(req.url || '')
@@ -28,8 +28,14 @@ export function createRelay({ host, port, user, password, connectUpstream = conn
       const end = buffered.indexOf('\r\n\r\n')
       if (end < 0) { if (buffered.length > 16384) fail(); return }
       upstream.off('data', onHeader)
-      const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(buffered.subarray(0, end).toString('latin1'))?.[1])
-      if (status !== 200) { totals.failed++; client.end(`HTTP/1.1 ${status === 407 ? 502 : status || 502} Upstream Proxy Error\r\n\r\n`); upstream.destroy(); return }
+      const line = /^HTTP\/1\.[01] (\d{3}) ?([^\r\n]*)/.exec(buffered.subarray(0, end).toString('latin1'))
+      const status = Number(line?.[1])
+      if (status !== 200) {
+        // Keep the upstream reason (e.g. 407 TRAFFIC_EXHAUSTED) visible; never echo credentials or headers.
+        const reason = String(line?.[2] || '').replace(/[^A-Za-z0-9_ -]/g, '').trim().slice(0, 40)
+        totals.failed++; totals.last_error = `${status || 'bad'}${reason ? ' ' + reason : ''}`
+        client.end(`HTTP/1.1 ${status === 407 || !status ? 502 : status} Upstream Proxy Error (${totals.last_error})\r\n\r\n`); upstream.destroy(); onFailure(); return
+      }
       open = true; totals.tunnels++; upstream.setTimeout(0)
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       const rest = buffered.subarray(end + 4)
@@ -48,8 +54,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const [credsFile, portFile, bytesFile] = process.argv.slice(2)
   const creds = JSON.parse(readFileSync(credsFile, 'utf8'))
   rmSync(credsFile, { force: true })
-  const { server, totals } = createRelay(creds)
-  const save = () => { try { writeFileSync(bytesFile, JSON.stringify({ up: totals.up, down: totals.down, tunnels: totals.tunnels, failed: totals.failed })) } catch {} }
+  let save = () => {}
+  const { server, totals } = createRelay({ ...creds, onFailure: () => save() })
+  save = () => { try { writeFileSync(bytesFile, JSON.stringify({ up: totals.up, down: totals.down, tunnels: totals.tunnels, failed: totals.failed, last_error: totals.last_error })) } catch {} }
   setInterval(save, 15000).unref()
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { save(); process.exit(0) })
   server.listen(0, '127.0.0.1', () => { writeFileSync(portFile, String(server.address().port)); save() })

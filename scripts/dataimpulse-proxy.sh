@@ -81,7 +81,7 @@ for model in "${PROBE_MODELS[@]}"; do
   if grep -q '"type":"text"' "$out"; then log "probe: $model answered"; rc=0; break; fi
   if grep -Eqi 'FreeUsageLimit|free usage limit|"status":429|\b429\b|rate.?limit' "$out"; then log "probe: $model rate limited (429)"; rc=4; break; fi
   if grep -Eqi 'ModelDeprecated|model.{0,40}(not found|unavailable|deprecated)|ProviderModelNotFound' "$out"; then continue; fi
-  log "probe: $model failed: $(tr '\n' ' ' < "$out" | grep -Eo '"name":"[A-Za-z]{1,60}' | head -1)"; rc=2; break
+  log "probe: $model failed: $(tr '\n' ' ' < "$out" | grep -Eo '"name":"[A-Za-z]{1,60}' | head -1) upstream: $(node -p 'require(process.argv[1]).last_error||"-"' "$web_dir/proxy-bytes.json" 2>/dev/null || echo -)"; rc=2; break
 done
 rm -rf "$probe"
 case "$rc" in
