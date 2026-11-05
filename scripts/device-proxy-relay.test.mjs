@@ -12,10 +12,44 @@ import {
 } from './device-proxy-relay.mjs'
 
 test('allowlist matches protocol', () => {
-  assert.deepEqual([...ALLOWED_HOSTS].sort(), ['models.opencode.ai', 'opencode.ai', 'openrouter.ai'])
+  assert.deepEqual([...ALLOWED_HOSTS].sort(), ['opencode.ai', 'openrouter.ai'])
   assert.equal(isAllowedOpen('opencode.ai', 443), true)
+  assert.equal(isAllowedOpen('openrouter.ai', 443), true)
+  assert.equal(isAllowedOpen('models.opencode.ai', 443), false, 'models stays off the phone')
   assert.equal(isAllowedOpen('github.com', 443), false)
   assert.equal(isAllowedOpen('opencode.ai', 80), false)
+})
+
+test('CONNECT to models.opencode.ai is rejected by the device relay', { timeout: 5000 }, async (t) => {
+  const { EventEmitter } = await import('node:events')
+  const sock = {
+    readyState: 0, sent: [],
+    send() {}, close() { sock.readyState = 3 },
+    on(ev, fn) { (sock._e ??= new EventEmitter()).on(ev, fn) },
+    once(ev, fn) { (sock._e ??= new EventEmitter()).once(ev, fn) },
+    off(ev, fn) { sock._e?.off(ev, fn) },
+  }
+  queueMicrotask(() => { sock.readyState = 1; sock._e?.emit('open') })
+  const { server, close } = createDeviceProxyRelay({
+    token: 'tok', wsUrl: 'ws://example/x', openSocketImpl: () => sock,
+  })
+  t.after(() => close())
+  await once(sock, 'open')
+  sock._e.emit('message', JSON.stringify({ v: 1, type: 'ready', user: 'a', max_streams: 8 }), false)
+  server.listen(0, '127.0.0.1'); await once(server, 'listening'); server.unref()
+  const port = server.address().port
+  const res = await new Promise((resolve, reject) => {
+    const c = netConnect({ host: '127.0.0.1', port })
+    let buf = Buffer.alloc(0)
+    c.on('connect', () => c.write('CONNECT models.opencode.ai:443 HTTP/1.1\r\nHost: models.opencode.ai:443\r\n\r\n'))
+    c.on('data', chunk => {
+      buf = Buffer.concat([buf, chunk])
+      if (buf.includes('\r\n\r\n')) { resolve(buf.toString('latin1')); c.end() }
+    })
+    c.on('error', reject)
+    setTimeout(() => reject(new Error('timeout ' + buf.toString())), 3000)
+  })
+  assert.match(res, /^HTTP\/1\.1 403/)
 })
 
 test('binary frames round-trip', () => {

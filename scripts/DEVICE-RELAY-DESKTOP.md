@@ -10,7 +10,7 @@ It speaks the same WSS protocol as the Android client: `hello` → `ready`, then
 2. A **runner** WebSocket paired to the same login (OpenCode / `device-proxy-relay.mjs`).
    Opens are always initiated by the runner; the device alone cannot open streams.
 
-Allowlisted hosts (port 443 only): `opencode.ai`, `models.opencode.ai`, `openrouter.ai`.
+Allowlisted hosts (port 443 only): `opencode.ai`, `openrouter.ai`. `models.opencode.ai` uses WARP/DataImpulse/direct (egress mux), never the phone.
 
 ## 1. Sign in and get a device token
 

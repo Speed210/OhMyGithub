@@ -699,15 +699,21 @@ jobs:
           printf '%s %s %s\n' "$OPENCODE_WEB_PORT" "$PROJECT_FILE_PORT" "$OPENCODE_CONTROL_PORT" > "$OPENCODE_WEB_DIR/controller-ports"
           echo "Allocated OpenCode port: $OPENCODE_WEB_PORT"
           echo "Allocated project file server port: $PROJECT_FILE_PORT"
-          WARP_PROXY=''
+          DEVICE_PROXY=''
+          GENERAL_PROXY=''
           # Phone-first egress (live WS presence). Quiet skip when available:false.
+          # models.opencode.ai is NOT on the device allowlist — it uses WARP/DataImpulse/direct
+          # via compose-egress-proxy.sh when the phone is also up.
           if bash "$RUNTIME_DIR/scripts/device-proxy.sh" "$RUNNER_TEMP/device-proxy" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
-            && WARP_PROXY="$(cat "$RUNNER_TEMP/device-proxy/proxy-url" 2>/dev/null)" && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
-            echo "Device relay ready"
-            echo "- Device relay: on (phone egress)" >> "$GITHUB_STEP_SUMMARY"
+            && DEVICE_PROXY="$(cat "$RUNNER_TEMP/device-proxy/proxy-url" 2>/dev/null)" && [[ "$DEVICE_PROXY" == http://127.0.0.1:* ]]; then
+            echo "Device relay ready (opencode.ai + openrouter.ai; models.opencode.ai stays off the phone)"
+            echo "- Device relay: on (phone for opencode.ai / openrouter.ai; models.opencode.ai uses WARP/DataImpulse/direct)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            DEVICE_PROXY=''
           fi
           # Settings > Enable WARP (on by default) adds the warp label. Default with Fusion
           # (plugin resolved on this run) skips WARP; any picked model or Default without Fusion uses it.
+          # Still set up WARP/DataImpulse when the phone is up — models.opencode.ai needs that path.
           fusion_on=false
           [[ "${plugin_commit:-}" =~ ^[a-f0-9]{40}$ ]] && fusion_on=true
           WARP_DECISION="$(node "$RUNTIME_DIR/scripts/warp-decision.mjs" "$WARP_REQUEST" "$fusion_on" "$LABELS_JSON" 2>/dev/null || echo off)"
@@ -716,38 +722,51 @@ jobs:
             echo "- WARP: skipped for Default because Fusion runs first (set up lazily before a free model)" >> "$GITHUB_STEP_SUMMARY"
             echo "WARP_LAZY=1" >> "$GITHUB_ENV"
           fi
-          if [[ "$WARP_DECISION" == 'on' && -z "$WARP_PROXY" ]]; then
+          if [[ "$WARP_DECISION" == 'on' ]]; then
             # Free models through Cloudflare WARP IPv6.
             # Only `opencode serve` gets the proxy; GitHub stays on the runner IP.
-            if WARP_PROXY="$(bash "$RUNTIME_DIR/scripts/warp-proxy.sh" "$RUNNER_TEMP/warp" "$OPENCODE_BIN" | tail -n 1)" \
-              && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
+            if GENERAL_PROXY="$(bash "$RUNTIME_DIR/scripts/warp-proxy.sh" "$RUNNER_TEMP/warp" "$OPENCODE_BIN" | tail -n 1)" \
+              && [[ "$GENERAL_PROXY" == http://127.0.0.1:* ]]; then
               echo "WARP proxy ready: egress $(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)"
               echo "- WARP: on, egress \`$(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)\`" >> "$GITHUB_STEP_SUMMARY"
               # WARP passed its probe; if a free model still hits FreeUsageLimit mid-build,
               # run-with-model-fallback.mjs switches to DataImpulse once.
               echo "WARP_RUNTIME_SWITCH=1" >> "$GITHUB_ENV"
             else
-              WARP_PROXY=''
+              GENERAL_PROXY=''
               # Fallback: sticky worldwide DataImpulse session via a local relay (credentials
-              # are masked and stay inside the relay; WARP_PROXY is only 127.0.0.1).
+              # are masked and stay inside the relay; proxy URL is only 127.0.0.1).
               # Its stdout carries ::add-mask:: lines, so it is never captured here.
               if [[ "$PROXY_REQUEST" != 'true' ]]; then
-                echo "::warning title=WARP unavailable::WARP failed and the residential proxy fallback is off in Settings; OpenCode uses the runner network."
-                echo "- WARP: requested but unavailable; residential proxy fallback off; used the runner network" >> "$GITHUB_STEP_SUMMARY"
+                echo "::warning title=WARP unavailable::WARP failed and the residential proxy fallback is off in Settings; OpenCode uses the runner network for non-device hosts."
+                echo "- WARP: requested but unavailable; residential proxy fallback off; used the runner network for models.opencode.ai" >> "$GITHUB_STEP_SUMMARY"
               elif bash "$RUNTIME_DIR/scripts/dataimpulse-proxy.sh" "$RUNNER_TEMP/dataimpulse" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
-                && WARP_PROXY="$(cat "$RUNNER_TEMP/dataimpulse/proxy-url" 2>/dev/null)" && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
+                && GENERAL_PROXY="$(cat "$RUNNER_TEMP/dataimpulse/proxy-url" 2>/dev/null)" && [[ "$GENERAL_PROXY" == http://127.0.0.1:* ]]; then
                 echo "DataImpulse proxy ready"
-                echo "- WARP: unavailable; used the DataImpulse proxy" >> "$GITHUB_STEP_SUMMARY"
+                echo "- WARP: unavailable; used the DataImpulse proxy (incl. models.opencode.ai)" >> "$GITHUB_STEP_SUMMARY"
               else
-                WARP_PROXY=''
-                echo "::warning title=WARP unavailable::WARP and the DataImpulse fallback failed; OpenCode uses the runner network."
-                echo "- WARP: requested but unavailable (DataImpulse $(node -p 'require(process.argv[1]).result' "$RUNNER_TEMP/dataimpulse/status.json" 2>/dev/null || echo error)); used the runner network" >> "$GITHUB_STEP_SUMMARY"
+                GENERAL_PROXY=''
+                echo "::warning title=WARP unavailable::WARP and the DataImpulse fallback failed; OpenCode uses the runner network for non-device hosts."
+                echo "- WARP: requested but unavailable (DataImpulse $(node -p 'require(process.argv[1]).result' "$RUNNER_TEMP/dataimpulse/status.json" 2>/dev/null || echo error)); used the runner network for models.opencode.ai" >> "$GITHUB_STEP_SUMMARY"
               fi
             fi
           fi
+          # Compose final HTTPS_PROXY for opencode serve.
+          WARP_PROXY=''
+          if [[ -n "$DEVICE_PROXY" ]]; then
+            if WARP_PROXY="$(bash "$RUNTIME_DIR/scripts/compose-egress-proxy.sh" "$RUNNER_TEMP/egress-mux" "$DEVICE_PROXY" "$GENERAL_PROXY")" \
+              && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
+              echo "Egress mux ready (device + ${GENERAL_PROXY:+general}${GENERAL_PROXY:-direct for models})"
+            else
+              echo "::warning title=Egress mux failed::Falling back to device relay only; models.opencode.ai may fail until WARP/direct path is fixed."
+              WARP_PROXY="$DEVICE_PROXY"
+            fi
+          else
+            WARP_PROXY="$GENERAL_PROXY"
+          fi
           # Admin build stats: record the WARP outcome, then post it right away (best-effort).
           date +%s%3N > "$OPENCODE_WEB_DIR/build-started-at" 2>/dev/null || true
-          WARP_STATUS_SOURCE="$RUNNER_TEMP/warp/status.json" PROXY_STATUS_SOURCE="$RUNNER_TEMP/dataimpulse/status.json" WARP_DECISION="$WARP_DECISION" WARP_READY="$([[ -n "$WARP_PROXY" ]] && echo 1)" \
+          WARP_STATUS_SOURCE="$RUNNER_TEMP/warp/status.json" PROXY_STATUS_SOURCE="$RUNNER_TEMP/dataimpulse/status.json" WARP_DECISION="$WARP_DECISION" WARP_READY="$([[ -n "$GENERAL_PROXY" ]] && echo 1)" \
             node -e 'const fs=require("fs"),e=process.env,d={on:"on",skip:"skipped_fusion"}[e.WARP_DECISION]||"off";let s={};try{s=JSON.parse(fs.readFileSync(e.WARP_STATUS_SOURCE,"utf8"))}catch{}
               let p={};try{p=JSON.parse(fs.readFileSync(e.PROXY_STATUS_SOURCE,"utf8"))}catch{}
               const px=["proxy_ok","proxy_429","proxy_error"].includes(p.result)?p.result:"";

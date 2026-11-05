@@ -10,11 +10,18 @@ set +x
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ "${PROXY_REQUEST:-}" == 'true' ]] || { echo "runtime proxy switch: residential proxy fallback is off for this run" >&2; exit 1; }
 : "${OPENCODE_BIN:?}" "${OPENCODE_WEB_DIR:?}"
-# Phone-first before DataImpulse.
+# Phone-first before DataImpulse. Keep the previous WARP/DataImpulse URL as the
+# mux "general" path so models.opencode.ai never moves onto the phone.
 work_device="${RUNNER_TEMP:-/tmp}/device-proxy-runtime"
 if bash "$here/device-proxy.sh" "$work_device" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" > /dev/null; then
-  proxy="$(cat "$work_device/proxy-url" 2>/dev/null || true)"
+  device="$(cat "$work_device/proxy-url" 2>/dev/null || true)"
   previous="$(cat "$OPENCODE_WEB_DIR/opencode-proxy" 2>/dev/null || true)"
+  general=''
+  [[ "$previous" == http://127.0.0.1:* && "$previous" != "$device" ]] && general="$previous"
+  proxy=""
+  if [[ "$device" == http://127.0.0.1:* ]]; then
+    proxy="$(bash "$here/compose-egress-proxy.sh" "${RUNNER_TEMP:-/tmp}/egress-mux-runtime" "$device" "$general" || true)"
+  fi
   if [[ "$proxy" == http://127.0.0.1:* ]] && bash "$here/start-opencode-serve.sh" "$proxy" --wait; then
     printf '%s\n' "$previous" > "$OPENCODE_WEB_DIR/opencode-proxy.fallback"
     PROXY_RESULT=device_ok node -e 'const fs=require("fs"),f=process.env.OPENCODE_WEB_DIR+"/warp-status.json";let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}

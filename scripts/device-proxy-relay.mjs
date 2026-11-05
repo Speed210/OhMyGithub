@@ -21,7 +21,7 @@ export const MAX_FRAME_PAYLOAD = 64 * 1024
 /** Per PROTOCOL.md / Android DeviceRelayProto: start credit and half-window grant batch. */
 export const INITIAL_CREDIT = 32
 export const WINDOW_BATCH = INITIAL_CREDIT / 2
-export const ALLOWED_HOSTS = Object.freeze(['opencode.ai', 'models.opencode.ai', 'openrouter.ai'])
+export const ALLOWED_HOSTS = Object.freeze(['opencode.ai', 'openrouter.ai'])
 
 export function isAllowedOpen(host, port) {
   const h = String(host || '').toLowerCase()
