@@ -170,3 +170,14 @@ test('a question-only turn reports awaiting_reply and skips delivery; the reply 
   await fallback.complete('m3')
   assert.ok(calls.includes('deploy2'))
 })
+
+test('pairing page stays on the family domain the visitor opened', async () => {
+  const { requestWorkerOrigin, v2PairPage } = await import('./session-lifecycle.mjs')
+  const web = 'https://oc-41951901851-1.omgithub.com'
+  assert.equal(requestWorkerOrigin(web, 'oc-41951901851-1.lolgames.net'), 'https://oc-41951901851-1.lolgames.net')
+  assert.equal(requestWorkerOrigin(web, 'oc-41951901851-1.omgithub.com'), web)
+  assert.equal(requestWorkerOrigin(web, 'oc-41951901851-1.evil.example'), web)
+  assert.equal(requestWorkerOrigin(web, 'oc-1-1.lolgames.net'), web)
+  assert.equal(requestWorkerOrigin(web, undefined), web)
+  assert.doesNotMatch(v2PairPage(requestWorkerOrigin(web, 'oc-41951901851-1.lolgames.net'), 'ses_abc123'), /omgithub\.com/)
+})

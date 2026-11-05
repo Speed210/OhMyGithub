@@ -140,6 +140,18 @@ export function child(file, args, { signal, killGraceMs = 5000, settleGraceMs = 
   })
 }
 
+// Site families serving the same worker under their own domain (the omsite tunnel adds a host per family).
+export const WORKER_DOMAINS = Object.freeze(['omgithub.com', 'lolgames.net'])
+// The pairing page must stay on the domain the visitor opened (a mirror page never sends people to omgithub.com).
+// Only the same worker label on a known family domain is accepted; anything else keeps the provisioned origin.
+export function requestWorkerOrigin(webUrl, host) {
+  let base
+  try { base = new URL(webUrl) } catch { return webUrl }
+  const label = base.hostname.split('.')[0], requested = String(host || '').toLowerCase().replace(/:\d+$/, '')
+  const match = WORKER_DOMAINS.find(domain => requested === `${label}.${domain}`)
+  return match && base.protocol === 'https:' ? `https://${requested}` : base.origin
+}
+
 export function v2PairPage(origin, sessionID) {
   const session = v2SessionUrl(origin, sessionID)
   // OpenCode 2.2.2's web client persists its server registry in this key.
@@ -227,7 +239,7 @@ async function serve() {
   const proxy = createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/omgithub/connect') {
-        const origin = readFileSync(join(directory, 'web-url'), 'utf8').trim()
+        const origin = requestWorkerOrigin(readFileSync(join(directory, 'web-url'), 'utf8').trim(), req.headers.host)
         const page = v2PairPage(origin, mainID())
         res.setHeader('content-type', 'text/html; charset=utf-8')
         res.setHeader('cache-control', 'no-store')
