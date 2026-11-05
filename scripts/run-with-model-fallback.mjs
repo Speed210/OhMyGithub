@@ -106,6 +106,19 @@ export function runtimeProxySwitch({ env = process.env, binary, logFile }) {
     child.on('close', status => { closeSync(fd); done(status === 0) })
   })
 }
+// Lazy egress: WARP was skipped because Default starts with Fusion (WARP_LAZY=1). Before the
+// first free model runs, set WARP up (DataImpulse if WARP fails) and restart `opencode serve`
+// behind it. Exit 0 = WARP, 3 = DataImpulse, other = runner network. Runs at most once.
+export function lazyProxySetup({ env = process.env, binary, logFile }) {
+  if (env.WARP_LAZY !== '1') return null
+  const script = join(dirname(fileURLToPath(import.meta.url)), 'lazy-proxy-setup.sh')
+  return () => new Promise(done => {
+    const fd = openSync(logFile, 'a')
+    const child = spawn('bash', [script], { cwd: env.PROJECT_DIR, env: { ...env, OPENCODE_BIN: binary }, stdio: ['ignore', 'ignore', fd] })
+    child.on('error', () => { closeSync(fd); done('none') })
+    child.on('close', status => { closeSync(fd); done(status === 0 ? 'warp' : status === 3 ? 'dataimpulse' : 'none') })
+  })
+}
 // Dead proxy: restart `opencode serve` without it (back to WARP after a runtime switch,
 // otherwise the runner network) instead of letting every model fail through it.
 export function proxyDrop({ env = process.env, binary, logFile }) {
@@ -121,7 +134,7 @@ export function proxyDrop({ env = process.env, binary, logFile }) {
     child.on('close', status => { closeSync(fd); done(status === 0) })
   })
 }
-export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, switchProxy = runtimeProxySwitch({ env, binary, logFile }), dropProxy }) {
+export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, switchProxy = runtimeProxySwitch({ env, binary, logFile }), dropProxy, lazyProxy = lazyProxySetup({ env, binary, logFile }) }) {
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const candidates = [...new Set(models)]
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
@@ -137,6 +150,15 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
     for (let index = 0; index < candidates.length; index++) {
       const model = candidates[index]
       if (interrupted) break
+      if (lazyProxy && freeEgressModel(model)) {
+        const setup = lazyProxy; lazyProxy = null
+        appendFileSync(logFile, '[model-fallback] Leaving Fusion for a free model; setting up the WARP proxy now.\n')
+        const mode = await setup().catch(() => 'none')
+        appendFileSync(logFile, `[model-fallback] Lazy proxy: ${mode}.\n`)
+        // WARP passed its probe: the one-time DataImpulse switch on FreeUsageLimit applies as usual.
+        if (mode === 'warp' && !switchProxy) switchProxy = runtimeProxySwitch({ env: { ...env, WARP_RUNTIME_SWITCH: '1' }, binary, logFile })
+        if (mode === 'dataimpulse') switched = true
+      }
       const started = Date.now()
       writeFileSync(join(directory, 'main-model'), model + '\n')
       void pingHeartbeat(env)
