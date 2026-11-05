@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fallback egress for free models after WARP gives up: a sticky US DataImpulse
+# Fallback egress for free models after WARP gives up: a sticky worldwide DataImpulse
 # residential session (sessid = GITHUB_RUN_ID), served only to verified
 # PlayGround runs by omgithub.com in exchange for this job's GitHub OIDC token.
 #

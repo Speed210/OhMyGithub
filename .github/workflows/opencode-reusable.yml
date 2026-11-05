@@ -701,7 +701,7 @@ jobs:
               echo "- WARP: on, egress \`$(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)\`" >> "$GITHUB_STEP_SUMMARY"
             else
               WARP_PROXY=''
-              # Fallback: sticky US DataImpulse session via a local relay (credentials
+              # Fallback: sticky worldwide DataImpulse session via a local relay (credentials
               # are masked and stay inside the relay; WARP_PROXY is only 127.0.0.1).
               # Its stdout carries ::add-mask:: lines, so it is never captured here.
               if bash "$RUNTIME_DIR/scripts/dataimpulse-proxy.sh" "$RUNNER_TEMP/dataimpulse" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
