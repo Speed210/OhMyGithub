@@ -12,6 +12,8 @@ import { connect as netConnect } from 'node:net'
 import { createHash, randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
+import { resolve as resolvePath } from 'node:path'
 
 export const PROTOCOL = 1
 export const DEFAULT_MAX_BYTES = 150 * 1024 * 1024
@@ -302,7 +304,7 @@ export function createDeviceProxyRelay({
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolvePath(process.argv[1])).href) {
   const [credsFile, portFile, bytesFile] = process.argv.slice(2)
   const creds = JSON.parse(readFileSync(credsFile, 'utf8'))
   rmSync(credsFile, { force: true })
