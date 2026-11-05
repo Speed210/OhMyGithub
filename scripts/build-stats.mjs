@@ -13,7 +13,10 @@ export function buildStats(directory, now = Date.now()) {
   const warp = readJson(directory, 'warp-status.json')
   if (warp && typeof warp === 'object') {
     stats.warp = { decision: warp.decision, result: warp.result }
-    for (const key of ['attempt', 'egress_prefix', 'colo']) if (warp[key] !== undefined && warp[key] !== '') stats.warp[key] = warp[key]
+    for (const key of ['attempt', 'egress_prefix', 'egress_prefix64', 'colo', 'warp_result']) if (warp[key] !== undefined && warp[key] !== '') stats.warp[key] = warp[key]
+    // DataImpulse relay byte counts (numbers only) for cost tracking.
+    const bytes = readJson(directory, 'proxy-bytes.json')
+    if (bytes && Number.isSafeInteger(bytes.up) && Number.isSafeInteger(bytes.down)) stats.warp.proxy_bytes = bytes.up + bytes.down
   }
   const model = readText(directory, 'main-model')
   if (model) stats.model = model

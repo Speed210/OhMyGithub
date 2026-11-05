@@ -701,16 +701,28 @@ jobs:
               echo "- WARP: on, egress \`$(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)\`" >> "$GITHUB_STEP_SUMMARY"
             else
               WARP_PROXY=''
-              echo "::warning title=WARP unavailable::WARP setup failed; OpenCode uses the runner network."
-              echo "- WARP: requested but unavailable; used the runner network" >> "$GITHUB_STEP_SUMMARY"
+              # Fallback: sticky US DataImpulse session via a local relay (credentials
+              # are masked and stay inside the relay; WARP_PROXY is only 127.0.0.1).
+              # Its stdout carries ::add-mask:: lines, so it is never captured here.
+              if bash "$RUNTIME_DIR/scripts/dataimpulse-proxy.sh" "$RUNNER_TEMP/dataimpulse" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
+                && WARP_PROXY="$(cat "$RUNNER_TEMP/dataimpulse/proxy-url" 2>/dev/null)" && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
+                echo "DataImpulse proxy ready"
+                echo "- WARP: unavailable; used the DataImpulse proxy" >> "$GITHUB_STEP_SUMMARY"
+              else
+                WARP_PROXY=''
+                echo "::warning title=WARP unavailable::WARP and the DataImpulse fallback failed; OpenCode uses the runner network."
+                echo "- WARP: requested but unavailable (DataImpulse $(node -p 'require(process.argv[1]).result' "$RUNNER_TEMP/dataimpulse/status.json" 2>/dev/null || echo error)); used the runner network" >> "$GITHUB_STEP_SUMMARY"
+              fi
             fi
           fi
           # Admin build stats: record the WARP outcome, then post it right away (best-effort).
           date +%s%3N > "$OPENCODE_WEB_DIR/build-started-at" 2>/dev/null || true
-          WARP_STATUS_SOURCE="$RUNNER_TEMP/warp/status.json" WARP_DECISION="$WARP_DECISION" WARP_READY="$([[ -n "$WARP_PROXY" ]] && echo 1)" \
+          WARP_STATUS_SOURCE="$RUNNER_TEMP/warp/status.json" PROXY_STATUS_SOURCE="$RUNNER_TEMP/dataimpulse/status.json" WARP_DECISION="$WARP_DECISION" WARP_READY="$([[ -n "$WARP_PROXY" ]] && echo 1)" \
             node -e 'const fs=require("fs"),e=process.env,d={on:"on",skip:"skipped_fusion"}[e.WARP_DECISION]||"off";let s={};try{s=JSON.parse(fs.readFileSync(e.WARP_STATUS_SOURCE,"utf8"))}catch{}
-              const r=d!=="on"?"not_run":e.WARP_READY?"ok":["429_fallback","setup_failed"].includes(s.result)?s.result:"setup_failed";
-              fs.writeFileSync(e.OPENCODE_WEB_DIR+"/warp-status.json",JSON.stringify({decision:d,result:r,...(d==="on"?{attempt:s.attempt,egress_prefix:s.egress_prefix,colo:s.colo}:{})}))' 2>/dev/null || true
+              let p={};try{p=JSON.parse(fs.readFileSync(e.PROXY_STATUS_SOURCE,"utf8"))}catch{}
+              const px=["proxy_ok","proxy_429","proxy_error"].includes(p.result)?p.result:"";
+              const r=d!=="on"?"not_run":px==="proxy_ok"&&e.WARP_READY?px:e.WARP_READY?"ok":px||(["429_fallback","setup_failed"].includes(s.result)?s.result:"setup_failed");
+              fs.writeFileSync(e.OPENCODE_WEB_DIR+"/warp-status.json",JSON.stringify({decision:d,result:r,...(d==="on"?{attempt:s.attempt,egress_prefix:s.egress_prefix,egress_prefix64:s.egress_prefix64,colo:s.colo,...(px?{warp_result:["429_fallback","setup_failed"].includes(s.result)?s.result:"setup_failed"}:{})}:{})}))' 2>/dev/null || true
           timeout 20 node "$RUNTIME_DIR/scripts/run-record.mjs" starting >/dev/null 2>&1 || true
           if [[ -n "$WARP_PROXY" ]]; then
             WARP_NO_PROXY='localhost,127.0.0.1,::1,github.com,.github.com,githubusercontent.com,.githubusercontent.com,githubcopilot.com,.githubcopilot.com'

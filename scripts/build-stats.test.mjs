@@ -37,3 +37,10 @@ test('attempt error classes', () => {
   assert.equal(attemptErrorClass({ status: 401 }), 'auth')
   assert.equal(attemptErrorClass({ message: 'Game build failed' }), 'other')
 })
+
+test('build stats carry the DataImpulse result, /64 and relay byte total', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stats-'))
+  writeFileSync(join(dir, 'warp-status.json'), JSON.stringify({ decision: 'on', result: 'proxy_ok', attempt: 2, egress_prefix64: '2a09:bac5:1:2::/64', warp_result: '429_fallback' }))
+  writeFileSync(join(dir, 'proxy-bytes.json'), JSON.stringify({ up: 100, down: 900, tunnels: 2, failed: 0 }))
+  assert.deepEqual(buildStats(dir).warp, { decision: 'on', result: 'proxy_ok', attempt: 2, egress_prefix64: '2a09:bac5:1:2::/64', warp_result: '429_fallback', proxy_bytes: 1000 })
+})

@@ -14,7 +14,7 @@ set -uo pipefail
 
 WGCF_VERSION=2.3.1
 WIREPROXY_VERSION=1.1.3
-MAX_REGISTRATIONS=6
+MAX_REGISTRATIONS=2
 PROBE_SECONDS=90
 EGRESS_PREFIX=2a09:bac
 KEEP_IPV4_FALLBACK=true
@@ -63,6 +63,12 @@ if [[ ! -x "$wireproxy" ]]; then
   tar -xzf "$work/wireproxy.tar.gz" -C "$work/bin" wireproxy && chmod +x "$wireproxy" || { log 'wireproxy unpack failed'; exit 1; }
 fi
 
+# /64 of an IPv6 address (expands "::"), e.g. 2a09:bac5:1:2::3 -> 2a09:bac5:1:2::/64.
+prefix64() {
+  printf '%s\n' "$1" | awk -F'::' '/:/ { n = split($1, a, ":"); m = (NF > 1 && $2 != "") ? split($2, b, ":") : 0
+    for (i = n + 1; i <= 8 - m; i++) a[i] = "0"; for (i = 1; i <= m; i++) a[8 - m + i] = b[i]
+    out = ""; for (i = 1; i <= 4; i++) out = out (i > 1 ? ":" : "") (a[i] == "" ? "0" : tolower(a[i])); print out "::/64" }' | tr -cd '0-9a-f:/'
+}
 free_port() { node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'; }
 
 stop_proxy() {
@@ -100,10 +106,10 @@ probe_model() {
 
 # Admin stats (no secrets): last attempt, /48 egress prefix, colo, and whether
 # every exit that reached the probe was rate limited (429) vs a setup error.
-probed=0; limited=0; last_prefix=''; last_colo=''
+probed=0; limited=0; last_prefix=''; last_prefix64=''; last_colo=''; exits=''
 write_status() {
-  printf '{"result":"%s","attempt":%s,"egress_prefix":"%s","colo":"%s","probed":%s,"rate_limited":%s}\n' \
-    "$1" "${attempt:-0}" "$last_prefix" "$last_colo" "$probed" "$limited" > "$work/status.json" 2>/dev/null || true
+  printf '{"result":"%s","attempt":%s,"egress_prefix":"%s","egress_prefix64":"%s","colo":"%s","probed":%s,"rate_limited":%s,"exits":[%s]}\n' \
+    "$1" "${attempt:-0}" "$last_prefix" "$last_prefix64" "$last_colo" "$probed" "$limited" "$exits" > "$work/status.json" 2>/dev/null || true
 }
 for attempt in $(seq 1 "$MAX_REGISTRATIONS"); do
   stop_proxy
@@ -116,7 +122,11 @@ for attempt in $(seq 1 "$MAX_REGISTRATIONS"); do
   # always leaves from WARP IPv6. With KEEP_IPV4_FALLBACK the IPv4 address
   # stays, so IPv4-only hosts (MCP servers, etc.) still work via WARP's IPv4
   # NAT instead of failing; the egress check below still requires IPv6.
-  awk -v port="$port" -v keep4="$KEEP_IPV4_FALLBACK" '
+  # The probe always runs on an IPv6-only config (keep4=false), so a 429 or OK
+  # reflects this exit's WARP IPv6 and never the shared WARP IPv4 NAT. Once the
+  # probe passes and KEEP_IPV4_FALLBACK is on, wireproxy restarts on the same
+  # port with IPv4 kept for IPv4-only hosts (MCP servers, etc.).
+  make_conf() { awk -v port="$port" -v keep4="$1" '
     function addrs(key, value,   n, parts, i, out) {
       n = split(value, parts, ","); out = ""
       for (i = 1; i <= n; i++) { gsub(/^[ \t]+|[ \t]+$/, "", parts[i]); if (keep4 == "true" || parts[i] ~ /:/) out = out (out == "" ? "" : ", ") parts[i] }
@@ -125,8 +135,9 @@ for attempt in $(seq 1 "$MAX_REGISTRATIONS"); do
     /^[ \t]*(Address|DNS)[ \t]*=/ { key = $0; sub(/[ \t]*=.*/, "", key); gsub(/[ \t]/, "", key); val = $0; sub(/^[^=]*=[ \t]*/, "", val); addrs(key, val); next }
     { print }
     END { print ""; print "[Resolve]"; print "ResolveStrategy = ipv6"; print ""; print "[http]"; print "BindAddress = 127.0.0.1:" port }
-  ' "$reg/wgcf-profile.conf" > "$reg/wireproxy.conf"
-  chmod 600 "$reg/wgcf-account.toml" "$reg/wgcf-profile.conf" "$reg/wireproxy.conf" 2>/dev/null
+  ' "$reg/wgcf-profile.conf"; }
+  make_conf false > "$reg/wireproxy.conf"; make_conf "$KEEP_IPV4_FALLBACK" > "$reg/wireproxy-keep4.conf"
+  chmod 600 "$reg/wgcf-account.toml" "$reg/wgcf-profile.conf" "$reg/wireproxy.conf" "$reg/wireproxy-keep4.conf" 2>/dev/null
   grep -Eq '^Address = .*:' "$reg/wireproxy.conf" || { log "attempt $attempt: WARP profile has no IPv6 address"; continue; }
   nohup "$wireproxy" -c "$reg/wireproxy.conf" > "$work/wireproxy.log" 2>&1 &
   echo $! > "$work/wireproxy.pid"
@@ -144,12 +155,25 @@ for attempt in $(seq 1 "$MAX_REGISTRATIONS"); do
   fi
   last_colo="$(printf '%s\n' "$trace" | sed -n 's/^colo=//p' | tr -cd 'A-Z' | cut -c1-3)"
   last_prefix="$(printf '%s' "$egress" | awk -F: 'NF>3 {print $1":"$2":"$3"::/48"}' | tr -cd '0-9a-fA-F:/')"
-  log "attempt $attempt: WARP egress $egress ($last_colo)"
+  last_prefix64="$(prefix64 "$egress")"
+  log "attempt $attempt: WARP egress $egress ($last_colo, ${last_prefix64:-?})"
   probe_model "$proxy"; rc=$?
+  exits="${exits:+$exits,}{\"prefix64\":\"$last_prefix64\",\"colo\":\"$last_colo\",\"probe\":$rc}"
   [[ "$rc" != 3 ]] && probed=$((probed + 1))
   [[ "$rc" == 4 ]] && limited=$((limited + 1))
   if [[ "$rc" == 0 || "$rc" == 3 ]]; then
     [[ "$rc" == 3 ]] && log 'model probe: no probe model available; keeping the verified WARP egress'
+    if [[ "$KEEP_IPV4_FALLBACK" == true ]] && ! cmp -s "$reg/wireproxy.conf" "$reg/wireproxy-keep4.conf"; then
+      stop_proxy
+      nohup "$wireproxy" -c "$reg/wireproxy-keep4.conf" > "$work/wireproxy.log" 2>&1 &
+      echo $! > "$work/wireproxy.pid"
+      ready=''
+      for _ in $(seq 1 15); do
+        [[ "$(curl --silent --max-time 8 --proxy "$proxy" "$TRACE_URL" 2>/dev/null)" == *"warp=on"* ]] && { ready=1; break; }
+        sleep 1
+      done
+      [[ -n "$ready" ]] || { log "attempt $attempt: IPv4-fallback restart failed"; continue; }
+    fi
     printf '%s\n' "$egress" > "$work/egress"
     write_status ok
     printf '%s\n' "$proxy"
