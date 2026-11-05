@@ -58,3 +58,12 @@ test('instrument page and locator capture APIs without changing buffers or faile
     assert.equal(readdirSync(join(web, 'wip-queue')).filter(name => name.endsWith('.json')).length, 1)
   } finally { rmSync(web, { recursive: true, force: true }) }
 })
+
+test('shrink screenshot options: CSS scale, JPEG quality only for JPEG, opt-out keeps full detail', () => {
+  assert.deepEqual(captures.shrinkOptions(undefined, {}), { scale: 'css' })
+  assert.deepEqual(captures.shrinkOptions({ path: 'a.png' }, {}), { path: 'a.png', scale: 'css' })
+  assert.deepEqual(captures.shrinkOptions({ path: 'a.jpg' }, {}), { path: 'a.jpg', scale: 'css', quality: 70 })
+  assert.deepEqual(captures.shrinkOptions({ type: 'jpeg', quality: 90, scale: 'device' }, {}), { type: 'jpeg', quality: 90, scale: 'device' })
+  const full = { path: 'a.png' }
+  assert.equal(captures.shrinkOptions(full, { OMGITHUB_SCREENSHOT_FULL: '1' }), full)
+})

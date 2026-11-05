@@ -72,6 +72,18 @@ function queueScreenshot(bytes, metadata, env = process.env) {
   return hash
 }
 
+// Keep agent screenshots small: CSS-pixel scale (no 2x/3x device pixels) and JPEG
+// quality 70 when the caller asks for JPEG (type or .jpg/.jpeg path). PNG stays PNG so
+// file names never lie about their bytes. OMGITHUB_SCREENSHOT_FULL=1 keeps full detail.
+function shrinkOptions(options, env = process.env) {
+  if (env.OMGITHUB_SCREENSHOT_FULL === '1') return options
+  const value = { ...(options && typeof options === 'object' ? options : {}) }
+  value.scale ??= 'css'
+  const jpeg = value.type === 'jpeg' || (!value.type && /\.jpe?g$/i.test(value.path || ''))
+  if (jpeg) value.quality ??= 70
+  return value
+}
+
 // Wrap public browser APIs so CLI screenshot, run-code, and locator captures
 // use the same provenance, including captures that never become OC attachments.
 function instrument(playwright, env = process.env) {
@@ -81,7 +93,7 @@ function instrument(playwright, env = process.env) {
     const original = prototype.screenshot
     const wrapped = async function (...args) {
       const page = pageFor(this), page_url = page.url(), captured_at = Date.now()
-      const bytes = await original.apply(this, args)
+      const bytes = await original.apply(this, [shrinkOptions(args[0], env), ...args.slice(1)])
       if (page.url() === page_url) {
         try { queueScreenshot(bytes, { page_url, captured_at, browser_session: env.OMGITHUB_BROWSER_SESSION || '', session_id: env.OPENCODE_SESSION_ID || '' }, env) }
         catch (error) { console.error('WIP capture deferred:', error.message) }
@@ -115,4 +127,4 @@ function instrument(playwright, env = process.env) {
     }
   }
 }
-module.exports = { projectOrigins, controllerPorts, skipReason, isProjectPage, imageType, queueScreenshot, instrument, webDirectory }
+module.exports = { shrinkOptions, projectOrigins, controllerPorts, skipReason, isProjectPage, imageType, queueScreenshot, instrument, webDirectory }

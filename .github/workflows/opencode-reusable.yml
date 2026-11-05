@@ -604,7 +604,8 @@ jobs:
         run: |
           set -euo pipefail
           install -d -m 700 "$OPENCODE_WEB_DIR"
-          OPENCODE_VERSION="$(/usr/bin/time -p node "$RUNTIME_DIR/scripts/latest-opencode-version.mjs")"
+          # Pinned: the image-history plugin targets the v2.2.5 plugin API (session.context, shell.create.before).
+          OPENCODE_VERSION="${OPENCODE_PINNED_VERSION:-2.2.5}"
           [[ "$OPENCODE_VERSION" =~ ^2\.[0-9]+\.[0-9]+$ ]]
           /usr/bin/time -p curl --fail --silent --show-error --location https://opencode.ai/v2/install -o "$OPENCODE_WEB_DIR/install-v2.sh"
           /usr/bin/time -p bash "$OPENCODE_WEB_DIR/install-v2.sh" --version "$OPENCODE_VERSION" --no-modify-path
@@ -625,6 +626,13 @@ jobs:
           {
             "$schema": "https://opencode.ai/config.json",
             "plugin": [],
+            "media": {
+              "image": {
+                "max_width": 1024,
+                "max_height": 1024,
+                "max_base64_bytes": 150000
+              }
+            },
             "permission": {
               "*": "allow",
               "task": "allow"
@@ -635,6 +643,13 @@ jobs:
           config_tmp="$OPENCODE_WEB_DIR/opencode.json"
           /usr/bin/time -p jq '.plugin = []' "$HOME/.config/opencode/opencode.json" > "$config_tmp"
 
+          /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
+          # Keep only the newest 2 images in model context; strip proxy env from bash-tool children.
+          image_history_plugin="$RUNTIME_DIR/scripts/opencode-plugins/image-history"
+          [[ -f "$image_history_plugin/server.js" ]]
+          /usr/bin/time -p jq --arg plugin "$image_history_plugin" \
+            '.plugins = (((.plugins // []) + [$plugin]) | unique)' \
+            "$HOME/.config/opencode/opencode.json" > "$config_tmp"
           /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
           if [[ -n "${FUSION_ACCESS_TOKEN:-}" ]]; then
             plugin_repo='https://github.com/OMGDemoPlayground/opencode-copilot-fusion.git'
