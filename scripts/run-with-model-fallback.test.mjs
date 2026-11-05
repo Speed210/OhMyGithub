@@ -144,3 +144,35 @@ test('a fresh interrupted terminal outcome stops the model sequence', async () =
     assert.equal(result.attempts[0].outcome, 'interrupted')
   } finally { f.close() }
 })
+test('runtime switch: first free-limit on WARP switches to DataImpulse once and retries the same model', async () => {
+  const f = await fixture(['quota', 'quota', 'success'])
+  try {
+    let switches = 0
+    const result = await runModels({ ...f.options, switchProxy: async () => { switches++; return true } })
+    assert.equal(result.code, 0)
+    assert.equal(switches, 1, 'switch only once per build')
+    assert.deepEqual(result.attempts.map(row => row.model), [preferredFreeModels[0], preferredFreeModels[0], preferredFreeModels[1]])
+    assert.equal(result.attempts[0].proxy_switch, 'ok')
+    assert.match(readFileSync(f.options.logFile, 'utf8'), /retrying opencode\/deepseek/)
+  } finally { f.close() }
+})
+test('runtime switch: a failed switch keeps going down the chain', async () => {
+  const f = await fixture(['quota', 'success'])
+  try {
+    const result = await runModels({ ...f.options, switchProxy: async () => false })
+    assert.deepEqual(result.attempts.map(row => row.model), preferredFreeModels.slice(0, 2))
+    assert.equal(result.attempts[0].proxy_switch, 'failed')
+  } finally { f.close() }
+})
+test('runtime switch: not for Fusion, non-free failures, or when WARP was not ok', async () => {
+  const f = await fixture(['fusion-auth', 'success'])
+  try {
+    let switches = 0
+    const chain = defaultModelChain(true)
+    await runModels({ ...f.options, selected: fusionModel, models: modelCandidates(fusionModel, null, chain), switchProxy: async () => { switches++; return true } })
+    assert.equal(switches, 0)
+  } finally { f.close() }
+  const { runtimeProxySwitch } = await import('./run-with-model-fallback.mjs')
+  assert.equal(runtimeProxySwitch({ env: {}, binary: 'oc', logFile: '/dev/null' }), null)
+  assert.equal(typeof runtimeProxySwitch({ env: { WARP_RUNTIME_SWITCH: '1' }, binary: 'oc', logFile: '/dev/null' }), 'function')
+})

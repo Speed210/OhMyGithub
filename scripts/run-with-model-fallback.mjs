@@ -83,7 +83,24 @@ export async function terminalAttemptOutcome({ api, sessionID, started, pause = 
   return null
 }
 
-export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null }) {
+// Anonymous free models (FreeUsageLimit is per egress block): the ones a proxy switch can help.
+export function freeEgressModel(model) {
+  return model !== fusionModel && (preferredFreeModels.includes(model) || /^opencode\/[\w.-]+-free$/.test(String(model)))
+}
+// Runtime egress switch: when WARP passed its startup probe (WARP_RUNTIME_SWITCH=1) but a free
+// model still hits FreeUsageLimit mid-build, move `opencode serve` to the DataImpulse relay once.
+// The script's stdout only carries ::add-mask:: lines and is discarded; its stderr (no secrets) goes to the run log.
+export function runtimeProxySwitch({ env = process.env, binary, logFile }) {
+  if (env.WARP_RUNTIME_SWITCH !== '1') return null
+  const script = join(dirname(fileURLToPath(import.meta.url)), 'runtime-proxy-switch.sh')
+  return () => new Promise(done => {
+    const fd = openSync(logFile, 'a')
+    const child = spawn('bash', [script], { cwd: env.PROJECT_DIR, env: { ...env, OPENCODE_BIN: binary }, stdio: ['ignore', 'ignore', fd] })
+    child.on('error', () => { closeSync(fd); done(false) })
+    child.on('close', status => { closeSync(fd); done(status === 0) })
+  })
+}
+export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, switchProxy = runtimeProxySwitch({ env, binary, logFile }) }) {
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const candidates = [...new Set(models)]
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
@@ -91,11 +108,13 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes(openrouterFallbackModel)) candidates.push(openrouterFallbackModel)
   let sessionID = env.RESUME_SESSION_ID || '', child, interrupted = false, code = 1
   const attempts = []
+  let switched = false
   const stop = signal => { interrupted = true; child?.kill(signal) }
   const onTerm = () => stop('SIGTERM'), onInt = () => stop('SIGINT')
   process.on('SIGTERM', onTerm); process.on('SIGINT', onInt)
   try {
-    for (const model of candidates) {
+    for (let index = 0; index < candidates.length; index++) {
+      const model = candidates[index]
       if (interrupted) break
       const started = Date.now()
       writeFileSync(join(directory, 'main-model'), model + '\n')
@@ -140,6 +159,15 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
       await pingHeartbeat(env)
       appendFileSync(logFile, `[timing] model ${model}: ${Date.now() - started} ms; cli exit ${cliCode}; terminal ${outcome || 'unverified'}; exit ${code}\n`)
       if (code === 0 || interrupted || !retryable) break
+      if (!switched && switchProxy && freeEgressModel(model) && attempts.at(-1).error_class === 'free-limit') {
+        switched = true
+        appendFileSync(logFile, '[model-fallback] Free usage limit on the WARP exit; switching OpenCode to the DataImpulse proxy.\n')
+        const ok = await switchProxy().catch(() => false)
+        attempts.at(-1).proxy_switch = ok ? 'ok' : 'failed'
+        writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify(attempts))
+        if (ok) { appendFileSync(logFile, `[model-fallback] DataImpulse proxy ready; retrying ${model}.\n`); index--; continue }
+        appendFileSync(logFile, '[model-fallback] DataImpulse proxy unavailable; keeping the current network.\n')
+      }
       if (model !== candidates.at(-1)) appendFileSync(logFile, '[model-fallback] Provider/model unavailable; advancing to the next candidate in the same session.\n')
     }
     if (interrupted && code === 0) code = 143

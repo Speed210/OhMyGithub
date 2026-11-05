@@ -78,28 +78,36 @@ stop_proxy() {
 
 # One tiny anonymous free-tier call with the real OpenCode client, isolated
 # from the job's OpenCode data so it neither uses the account's auth nor
-# leaves a session behind. 0 = served, 2 = rate limited / failed, 3 = no usable model.
+# leaves a session behind. 0 = served twice in a row, 4 = rate limited, 2 = failed, 3 = no usable model.
 probe_model() {
   local proxy="$1" probe="$work/probe" model out rc
   rm -rf "$probe"; mkdir -p "$probe/project" "$probe/data" "$probe/config" "$probe/cache" "$probe/state"
   printf '{"plugin":[],"permission":{"*":"allow"}}\n' > "$probe/opencode.json"
+  # A single lucky answer is not enough (issue 38: WARP passed one probe, then the real
+  # request hit FreeUsageLimit 3s later), so a model must answer twice in a row.
   for model in "${PROBE_MODELS[@]}"; do
-    out="$probe/run-${model//\//_}.jsonl"
-    ( cd "$probe/project" && HTTPS_PROXY="$proxy" HTTP_PROXY="$proxy" https_proxy="$proxy" http_proxy="$proxy" \
-        NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
-        XDG_DATA_HOME="$probe/data" XDG_CONFIG_HOME="$probe/config" XDG_CACHE_HOME="$probe/cache" XDG_STATE_HOME="$probe/state" \
-        OPENCODE_CONFIG="$probe/opencode.json" OPENCODE_API_KEY= OPENCODE_AUTH_JSON= OPENROUTER_API_KEY= \
-        bounded "$PROBE_SECONDS" "$opencode_bin" run --standalone --model "$model" --format json 'Reply with exactly: OK' ) > "$out" 2>&1
-    rc=$?
-    if grep -q '"type":"text"' "$out"; then log "model probe: $model answered through WARP"; return 0; fi
-    if grep -Eqi 'FreeUsageLimit|free usage limit|"status":429|\b429\b|rate.?limit' "$out"; then
-      log "model probe: $model rate limited (429) on this WARP exit"; return 4
-    fi
-    if grep -Eqi 'ModelDeprecated|model.{0,40}(not found|unavailable|deprecated)|ProviderModelNotFound' "$out"; then
-      log "model probe: $model unavailable, trying the next free model"; continue
-    fi
-    log "model probe: $model failed (exit $rc): $(tr '\n' ' ' < "$out" | grep -Eo '"(message|name)":"[^"]{0,160}' | head -2 | tr '\n' ' ')"
-    return 2
+    local pass
+    for pass in 1 2; do
+      out="$probe/run-${model//\//_}-$pass.jsonl"
+      ( cd "$probe/project" && HTTPS_PROXY="$proxy" HTTP_PROXY="$proxy" https_proxy="$proxy" http_proxy="$proxy" \
+          NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
+          XDG_DATA_HOME="$probe/data" XDG_CONFIG_HOME="$probe/config" XDG_CACHE_HOME="$probe/cache" XDG_STATE_HOME="$probe/state" \
+          OPENCODE_CONFIG="$probe/opencode.json" OPENCODE_API_KEY= OPENCODE_AUTH_JSON= OPENROUTER_API_KEY= \
+          bounded "$PROBE_SECONDS" "$opencode_bin" run --standalone --model "$model" --format json 'Reply with exactly: OK' ) > "$out" 2>&1
+      rc=$?
+      if grep -q '"type":"text"' "$out"; then
+        if [[ $pass == 1 ]]; then log "model probe: $model answered through WARP (1/2), confirming"; continue; fi
+        log "model probe: $model answered twice in a row through WARP"; return 0
+      fi
+      if grep -Eqi 'FreeUsageLimit|free usage limit|"status":429|\b429\b|rate.?limit' "$out"; then
+        log "model probe: $model rate limited (429) on this WARP exit (pass $pass)"; return 4
+      fi
+      if grep -Eqi 'ModelDeprecated|model.{0,40}(not found|unavailable|deprecated)|ProviderModelNotFound' "$out"; then
+        log "model probe: $model unavailable, trying the next free model"; continue 2
+      fi
+      log "model probe: $model failed (exit $rc, pass $pass): $(tr '\n' ' ' < "$out" | grep -Eo '"(message|name)":"[^"]{0,160}' | head -2 | tr '\n' ' ')"
+      return 2
+    done
   done
   return 3
 }

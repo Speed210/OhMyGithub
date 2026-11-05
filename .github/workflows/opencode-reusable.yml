@@ -699,6 +699,9 @@ jobs:
               && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
               echo "WARP proxy ready: egress $(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)"
               echo "- WARP: on, egress \`$(cat "$RUNNER_TEMP/warp/egress" 2>/dev/null)\`" >> "$GITHUB_STEP_SUMMARY"
+              # WARP passed its probe; if a free model still hits FreeUsageLimit mid-build,
+              # run-with-model-fallback.mjs switches to DataImpulse once.
+              echo "WARP_RUNTIME_SWITCH=1" >> "$GITHUB_ENV"
             else
               WARP_PROXY=''
               # Fallback: sticky worldwide DataImpulse session via a local relay (credentials
@@ -724,18 +727,8 @@ jobs:
               const r=d!=="on"?"not_run":px==="proxy_ok"&&e.WARP_READY?px:e.WARP_READY?"ok":px||(["429_fallback","setup_failed"].includes(s.result)?s.result:"setup_failed");
               fs.writeFileSync(e.OPENCODE_WEB_DIR+"/warp-status.json",JSON.stringify({decision:d,result:r,...(d==="on"?{attempt:s.attempt,egress_prefix:s.egress_prefix,egress_prefix64:s.egress_prefix64,colo:s.colo,...(px?{warp_result:["429_fallback","setup_failed"].includes(s.result)?s.result:"setup_failed"}:{})}:{})}))' 2>/dev/null || true
           timeout 20 node "$RUNTIME_DIR/scripts/run-record.mjs" starting >/dev/null 2>&1 || true
-          if [[ -n "$WARP_PROXY" ]]; then
-            WARP_NO_PROXY='localhost,127.0.0.1,::1,github.com,.github.com,githubusercontent.com,.githubusercontent.com,githubcopilot.com,.githubcopilot.com'
-            nohup env HTTPS_PROXY="$WARP_PROXY" HTTP_PROXY="$WARP_PROXY" https_proxy="$WARP_PROXY" http_proxy="$WARP_PROXY" \
-              NO_PROXY="$WARP_NO_PROXY" no_proxy="$WARP_NO_PROXY" \
-              "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$OPENCODE_WEB_PORT" \
-              > "$OPENCODE_WEB_DIR/opencode.log" 2>&1 &
-            echo $! > "$OPENCODE_WEB_DIR/opencode.pid"
-          else
-          nohup "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$OPENCODE_WEB_PORT" \
-            > "$OPENCODE_WEB_DIR/opencode.log" 2>&1 &
-          echo $! > "$OPENCODE_WEB_DIR/opencode.pid"
-          fi
+          # Shared with the runtime DataImpulse switch (scripts/runtime-proxy-switch.sh).
+          OPENCODE_BIN="$OPENCODE_BIN" bash "$RUNTIME_DIR/scripts/start-opencode-serve.sh" "$WARP_PROXY"
           wait_for_http() {
             local url="$1"
             local attempts="$2"

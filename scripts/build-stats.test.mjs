@@ -44,3 +44,9 @@ test('build stats carry the DataImpulse result, /64 and relay byte total', () =>
   writeFileSync(join(dir, 'proxy-bytes.json'), JSON.stringify({ up: 100, down: 900, tunnels: 2, failed: 0 }))
   assert.deepEqual(buildStats(dir).warp, { decision: 'on', result: 'proxy_ok', attempt: 2, egress_prefix64: '2a09:bac5:1:2::/64', warp_result: '429_fallback', proxy_bytes: 1000 })
 })
+
+test('build stats keep the WARP result and add the runtime DataImpulse switch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stats-'))
+  writeFileSync(join(dir, 'warp-status.json'), JSON.stringify({ decision: 'on', result: 'ok', attempt: 1, proxy: 'proxy_ok', switched_at: 'runtime' }))
+  assert.deepEqual(buildStats(dir).warp, { decision: 'on', result: 'ok', attempt: 1, proxy: 'proxy_ok', switched_at: 'runtime' })
+})
