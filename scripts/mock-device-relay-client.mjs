@@ -12,6 +12,7 @@ import { connect, createServer } from 'node:net'
 import { readFileSync } from 'node:fs'
 import {
   PROTOCOL, ALLOWED_HOSTS, isAllowedOpen, parseBinaryFrame, encodeBinaryFrame, openSocket,
+  WINDOW_BATCH,
 } from './device-proxy-relay.mjs'
 
 function usage() {
@@ -57,7 +58,17 @@ ws.on('message', (data, isBinary) => {
     const frame = parseBinaryFrame(Buffer.isBuffer(data) ? data : Buffer.from(data))
     if (!frame) return
     const s = streams.get(frame.id)
-    if (s?.socket && !s.socket.destroyed) s.socket.write(frame.payload)
+    if (s?.socket && !s.socket.destroyed) {
+      s.socket.write(frame.payload)
+      // Grant credit for frames we consumed so a credit-enforcing runner does not stall.
+      // Sending stays lenient (test tool — no takeCredit on outbound).
+      s.consumed = (s.consumed | 0) + 1
+      if (s.consumed >= WINDOW_BATCH) {
+        const n = s.consumed
+        s.consumed = 0
+        try { ws.send(JSON.stringify({ v: PROTOCOL, type: 'window', id: frame.id, credit: n })) } catch {}
+      }
+    }
     return
   }
   let msg
@@ -94,7 +105,7 @@ ws.on('message', (data, isBinary) => {
   socket.on('connect', () => {
     clearTimeout(timer)
     const local = `${socket.localAddress}:${socket.localPort}`
-    streams.set(id, { socket, host: msg.host })
+    streams.set(id, { socket, host: msg.host, consumed: 0 })
     ws.send(JSON.stringify({ v: PROTOCOL, type: 'opened', id }))
     console.error(`[mock-phone] opened #${id} -> ${msg.host}:${msg.port} (local ${local})`)
   })

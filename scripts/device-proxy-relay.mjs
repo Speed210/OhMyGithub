@@ -18,6 +18,9 @@ import { resolve as resolvePath } from 'node:path'
 export const PROTOCOL = 1
 export const DEFAULT_MAX_BYTES = 150 * 1024 * 1024
 export const MAX_FRAME_PAYLOAD = 64 * 1024
+/** Per PROTOCOL.md / Android DeviceRelayProto: start credit and half-window grant batch. */
+export const INITIAL_CREDIT = 32
+export const WINDOW_BATCH = INITIAL_CREDIT / 2
 export const ALLOWED_HOSTS = Object.freeze(['opencode.ai', 'models.opencode.ai', 'openrouter.ai'])
 
 export function isAllowedOpen(host, port) {
@@ -171,15 +174,57 @@ export function createDeviceProxyRelay({
     onFailure()
   }
 
-  const sendPayload = (id, payload) => {
-    if (!ws || ws.readyState !== 1) return
-    try { ws.send(encodeBinaryFrame(id, payload), { binary: true }) } catch {}
+  const grantWindow = (s) => {
+    if (!ws || ws.readyState !== 1 || !s) return
+    const n = s.consumed | 0
+    if (n <= 0) return
+    s.consumed = 0
+    try { ws.send(JSON.stringify({ v: PROTOCOL, type: 'window', id: s.id, credit: Math.max(0, Math.min(256, n)) })) } catch {}
+  }
+
+  /** Consume one inbound (device→runner) frame: grant credit in WINDOW_BATCH chunks (match Android). */
+  const onDeviceFrame = (s) => {
+    s.consumed = (s.consumed | 0) + 1
+    if (s.consumed >= WINDOW_BATCH) grantWindow(s)
+  }
+
+  const flushQueue = (s) => {
+    if (!s) return
+    while (s.queue.length && s.credit > 0 && ws?.readyState === 1) {
+      const payload = s.queue.shift()
+      s.credit--
+      totals.up += payload.length
+      count(s.host, payload.length)
+      try { ws.send(encodeBinaryFrame(s.id, payload), { binary: true }) } catch { break }
+    }
+    if (s.queue.length === 0 && s.credit > 0) {
+      try { s.client.resume() } catch {}
+    } else if (s.credit <= 0 || s.queue.length) {
+      try { s.client.pause() } catch {}
+    }
+  }
+
+  /** Send runner→device payload; pause local CONNECT client when credit hits 0. */
+  const sendPayload = (s, payload) => {
+    if (!s || !ws || ws.readyState !== 1) return
+    const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload)
+    if (s.credit <= 0 || s.queue.length) {
+      s.queue.push(Buffer.from(p))
+      try { s.client.pause() } catch {}
+      return
+    }
+    s.credit--
+    totals.up += p.length
+    count(s.host, p.length)
+    try { ws.send(encodeBinaryFrame(s.id, p), { binary: true }) } catch {}
+    if (s.credit <= 0) try { s.client.pause() } catch {}
   }
 
   const closeStream = (id, reason) => {
     const s = streams.get(id)
     if (!s) return
     streams.delete(id)
+    if (s.consumed) grantWindow(s)
     if (ws?.readyState === 1) {
       try { ws.send(JSON.stringify({ v: PROTOCOL, type: 'close', id, reason })) } catch {}
     }
@@ -200,6 +245,7 @@ export function createDeviceProxyRelay({
       totals.down += frame.payload.length
       count(s.host, frame.payload.length)
       try { s.client.write(frame.payload) } catch {}
+      onDeviceFrame(s)
       return
     }
     let msg
@@ -208,7 +254,11 @@ export function createDeviceProxyRelay({
     if (msg.type === 'ping') { try { ws.send(JSON.stringify({ v: PROTOCOL, type: 'pong', t: msg.t })) } catch {}; return }
     if (msg.type === 'window') {
       const s = streams.get(Number(msg.id))
-      if (s) s.credit = Math.max(0, Math.min(256, Number(msg.credit) | 0))
+      if (!s) return
+      // PROTOCOL: each window *adds* credit (Android addCredit); clamp total.
+      const add = Math.max(0, Math.min(256, Number(msg.credit) | 0))
+      s.credit = Math.max(0, Math.min(256, (s.credit | 0) + add))
+      flushQueue(s)
       return
     }
     if (msg.type === 'opened') {
@@ -218,12 +268,13 @@ export function createDeviceProxyRelay({
       totals.tunnels++
       try { s.client.write('HTTP/1.1 200 Connection Established\r\n\r\n') } catch {}
       if (s.head?.length) {
-        totals.up += s.head.length; count(s.host, s.head.length)
-        sendPayload(s.id, s.head); s.head = null
+        const head = s.head; s.head = null
+        sendPayload(s, head)
       }
       s.client.on('data', chunk => {
-        totals.up += chunk.length; count(s.host, chunk.length)
-        for (let off = 0; off < chunk.length; off += MAX_FRAME_PAYLOAD) sendPayload(s.id, chunk.subarray(off, off + MAX_FRAME_PAYLOAD))
+        for (let off = 0; off < chunk.length; off += MAX_FRAME_PAYLOAD) {
+          sendPayload(s, chunk.subarray(off, off + MAX_FRAME_PAYLOAD))
+        }
       })
       s.client.on('close', () => closeStream(s.id, 'eof'))
       s.client.on('error', () => closeStream(s.id, 'error'))
@@ -280,7 +331,11 @@ export function createDeviceProxyRelay({
     if (streams.size >= maxStreams) { client.end('HTTP/1.1 503 Too Many Streams\r\n\r\n'); return }
     const id = nextId++
     const hostname = host.toLowerCase()
-    streams.set(id, { id, client, host: hostname, open: false, credit: 32, head: head?.length ? Buffer.from(head) : null })
+    streams.set(id, {
+      id, client, host: hostname, open: false,
+      credit: INITIAL_CREDIT, consumed: 0, queue: [],
+      head: head?.length ? Buffer.from(head) : null,
+    })
     try {
       ws.send(JSON.stringify({ v: PROTOCOL, type: 'open', id, host: hostname, port: 443 }))
     } catch {
@@ -294,11 +349,14 @@ export function createDeviceProxyRelay({
   return {
     server,
     totals,
+    /** Test helper: live stream state by id. */
+    _streams: streams,
     close() {
       closed = true
       clearInterval(ping)
       failAll('shutdown')
       try { ws?.close() } catch {}
+      try { server.closeAllConnections?.() } catch {}
       try { server.close() } catch {}
     },
   }
