@@ -12,12 +12,12 @@ test('relay adds upstream proxy auth, tunnels, counts bytes, and keeps creds off
   const upstream = createServer()
   upstream.on('connect', (req, socket) => {
     seen.push(req.headers['proxy-authorization'])
-    if (req.headers['proxy-authorization'] !== 'Basic ' + Buffer.from('u__cr.us;sessid.1:p').toString('base64')) return socket.end('HTTP/1.1 407 Auth\r\n\r\n')
+    if (req.headers['proxy-authorization'] !== 'Basic ' + Buffer.from('u__sessid.1:p').toString('base64')) return socket.end('HTTP/1.1 407 Auth\r\n\r\n')
     const [host, port] = req.url.split(':')
     const out = connect(Number(port), host, () => { socket.write('HTTP/1.1 200 OK\r\n\r\n'); out.pipe(socket); socket.pipe(out) })
   })
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening')
-  const { server, totals } = createRelay({ host: '127.0.0.1', port: upstream.address().port, user: 'u__cr.us;sessid.1', password: 'p' })
+  const { server, totals } = createRelay({ host: '127.0.0.1', port: upstream.address().port, user: 'u__sessid.1', password: 'p' })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   const tunnel = await new Promise((resolve, reject) => {
     const req = request({ host: '127.0.0.1', port: server.address().port, method: 'CONNECT', path: `127.0.0.1:${target.address().port}` })

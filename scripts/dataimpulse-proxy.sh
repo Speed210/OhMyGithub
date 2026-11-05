@@ -48,7 +48,7 @@ try {
     body: JSON.stringify({ run: env.GITHUB_RUN_ID, attempt: Number(env.GITHUB_RUN_ATTEMPT) })
   })
   if (![c.login, c.password, c.host].every(v => typeof v === 'string' && v && !/[\s:@]/.test(v)) || !Number.isInteger(c.port)) throw new Error('bad response')
-  const user = `${c.login}__cr.us;sessid.${env.GITHUB_RUN_ID}`
+  const user = `${c.login}__sessid.${env.GITHUB_RUN_ID}`
   for (const secret of [c.login, c.password, user, `${user}:${c.password}`, Buffer.from(`${user}:${c.password}`).toString('base64'), `http://${user}:${c.password}@${c.host}:${c.port}`]) console.log(`::add-mask::${secret}`)
   writeFileSync(process.argv[2], JSON.stringify({ host: c.host, port: c.port, user, password: c.password }), { mode: 0o600 })
 } catch (error) { console.error(`[dataimpulse] credentials unavailable (${String(error.message).slice(0, 60)})`); process.exit(1) }
