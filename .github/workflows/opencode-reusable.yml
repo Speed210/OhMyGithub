@@ -91,6 +91,8 @@ jobs:
       OMO_REQUEST: ${{ contains(inputs.labels_json, '"omo"') }}
       SSH_ONLY_REQUEST: ${{ contains(inputs.labels_json, '"ssh"') }}
       WARP_REQUEST: ${{ contains(inputs.labels_json, '"warp"') }}
+      # Settings > Residential proxy fallback (DataImpulse), off by default, adds the proxy label.
+      PROXY_REQUEST: ${{ contains(inputs.labels_json, '"proxy"') }}
       VALIDATION_ENABLED: ${{ vars.VALIDATION_ENABLED || 'true' }}
     steps:
       - name: Record job start time
@@ -708,7 +710,10 @@ jobs:
               # Fallback: sticky worldwide DataImpulse session via a local relay (credentials
               # are masked and stay inside the relay; WARP_PROXY is only 127.0.0.1).
               # Its stdout carries ::add-mask:: lines, so it is never captured here.
-              if bash "$RUNTIME_DIR/scripts/dataimpulse-proxy.sh" "$RUNNER_TEMP/dataimpulse" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
+              if [[ "$PROXY_REQUEST" != 'true' ]]; then
+                echo "::warning title=WARP unavailable::WARP failed and the residential proxy fallback is off in Settings; OpenCode uses the runner network."
+                echo "- WARP: requested but unavailable; residential proxy fallback off; used the runner network" >> "$GITHUB_STEP_SUMMARY"
+              elif bash "$RUNTIME_DIR/scripts/dataimpulse-proxy.sh" "$RUNNER_TEMP/dataimpulse" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
                 && WARP_PROXY="$(cat "$RUNNER_TEMP/dataimpulse/proxy-url" 2>/dev/null)" && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
                 echo "DataImpulse proxy ready"
                 echo "- WARP: unavailable; used the DataImpulse proxy" >> "$GITHUB_STEP_SUMMARY"

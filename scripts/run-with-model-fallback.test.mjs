@@ -186,7 +186,8 @@ test('runtime switch: not for Fusion, non-free failures, or when WARP was not ok
   } finally { f.close() }
   const { runtimeProxySwitch } = await import('./run-with-model-fallback.mjs')
   assert.equal(runtimeProxySwitch({ env: {}, binary: 'oc', logFile: '/dev/null' }), null)
-  assert.equal(typeof runtimeProxySwitch({ env: { WARP_RUNTIME_SWITCH: '1' }, binary: 'oc', logFile: '/dev/null' }), 'function')
+  assert.equal(typeof runtimeProxySwitch({ env: { WARP_RUNTIME_SWITCH: '1', PROXY_REQUEST: 'true' }, binary: 'oc', logFile: '/dev/null' }), 'function')
+  assert.equal(runtimeProxySwitch({ env: { WARP_RUNTIME_SWITCH: '1' }, binary: 'oc', logFile: '/dev/null' }), null, 'proxy toggle off by default')
 })
 test('dead proxy (502 Upstream Proxy Error / TRAFFIC_EXHAUSTED) drops the proxy once and retries the same model', async () => {
   const { proxyTunnelError, attemptErrorClass } = await import('./run-with-model-fallback.mjs')

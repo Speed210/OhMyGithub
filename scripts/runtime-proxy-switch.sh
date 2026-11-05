@@ -8,6 +8,7 @@
 set -uo pipefail
 set +x
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[[ "${PROXY_REQUEST:-}" == 'true' ]] || { echo "runtime proxy switch: residential proxy fallback is off for this run" >&2; exit 1; }
 : "${OPENCODE_BIN:?}" "${OPENCODE_WEB_DIR:?}"
 work="${RUNNER_TEMP:-/tmp}/dataimpulse-runtime"
 bash "$here/dataimpulse-proxy.sh" "$work" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" > /dev/null

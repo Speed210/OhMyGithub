@@ -97,7 +97,7 @@ export function freeEgressModel(model) {
 // model still hits FreeUsageLimit mid-build, move `opencode serve` to the DataImpulse relay once.
 // The script's stdout only carries ::add-mask:: lines and is discarded; its stderr (no secrets) goes to the run log.
 export function runtimeProxySwitch({ env = process.env, binary, logFile }) {
-  if (env.WARP_RUNTIME_SWITCH !== '1') return null
+  if (env.WARP_RUNTIME_SWITCH !== '1' || env.PROXY_REQUEST !== 'true') return null // proxy toggle off by default
   const script = join(dirname(fileURLToPath(import.meta.url)), 'runtime-proxy-switch.sh')
   return () => new Promise(done => {
     const fd = openSync(logFile, 'a')

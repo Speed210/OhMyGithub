@@ -6,7 +6,7 @@
 # Usage: dataimpulse-proxy.sh <work-dir> <opencode-bin> <web-dir>
 # Exit 0: <work-dir>/proxy-url holds http://127.0.0.1:PORT (a local relay that
 #         adds the upstream credentials; OpenCode never sees them).
-# Exit 4: the probe was rate limited (429). Other non-zero: setup error.
+# Exit 4: the probe was rate limited (429). Exit 5: fallback off (PROXY_REQUEST!=true). Other non-zero: setup error.
 # Always writes <work-dir>/status.json {"result":"proxy_ok|proxy_429|proxy_error"}.
 # Never enable set -x here: the credentials pass through this script's children.
 set -uo pipefail
@@ -19,6 +19,8 @@ log() { printf '[dataimpulse] %s\n' "$*" >&2; }
 mkdir -p "$work" && chmod 700 "$work"
 status() { printf '{"result":"%s"}\n' "$1" > "$work/status.json" 2>/dev/null || true; }
 status proxy_error
+# Settings > Residential proxy fallback is off by default (no proxy label): never call ci-proxy.
+if [[ "${PROXY_REQUEST:-}" != 'true' ]]; then log 'residential proxy fallback is off for this run'; status proxy_off; exit 5; fi
 bounded() {
   local seconds="$1"; shift
   "$@" & local pid=$!

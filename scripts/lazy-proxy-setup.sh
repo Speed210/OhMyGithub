@@ -17,6 +17,10 @@ if [[ "$proxy" == http://127.0.0.1:* ]] && bash "$here/start-opencode-serve.sh" 
   echo "lazy proxy: WARP ready" >&2; record warp; exit 0
 fi
 work="$tmp/dataimpulse-lazy"
+if [[ "${PROXY_REQUEST:-}" != 'true' ]]; then
+  bash "$here/start-opencode-serve.sh" "" --wait >/dev/null 2>&1 || true
+  echo "lazy proxy: WARP unavailable, residential proxy fallback off; runner network" >&2; record none; exit 1
+fi
 if bash "$here/dataimpulse-proxy.sh" "$work" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" > /dev/null \
   && proxy="$(cat "$work/proxy-url" 2>/dev/null)" && [[ "$proxy" == http://127.0.0.1:* ]] \
   && bash "$here/start-opencode-serve.sh" "$proxy" --wait; then
