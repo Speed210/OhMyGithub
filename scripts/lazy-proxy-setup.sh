@@ -12,6 +12,13 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="${RUNNER_TEMP:-/tmp}"
 record() { LAZY_RESULT="$1" node -e 'const fs=require("fs"),f=process.env.OPENCODE_WEB_DIR+"/warp-status.json";let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}
 fs.writeFileSync(f,JSON.stringify({...s,lazy:process.env.LAZY_RESULT}))' 2>/dev/null || true; }
+# Phone-first: skip quietly when available:false (exit 5).
+work_device="$tmp/device-proxy-lazy"
+if bash "$here/device-proxy.sh" "$work_device" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" > /dev/null \
+  && proxy="$(cat "$work_device/proxy-url" 2>/dev/null)" && [[ "$proxy" == http://127.0.0.1:* ]] \
+  && bash "$here/start-opencode-serve.sh" "$proxy" --wait; then
+  echo "lazy proxy: device relay ready" >&2; record device; exit 0
+fi
 proxy="$(bash "$here/warp-proxy.sh" "$tmp/warp" "$OPENCODE_BIN" 2>&2 | tail -n 1)"
 if [[ "$proxy" == http://127.0.0.1:* ]] && bash "$here/start-opencode-serve.sh" "$proxy" --wait; then
   echo "lazy proxy: WARP ready" >&2; record warp; exit 0

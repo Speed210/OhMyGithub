@@ -700,6 +700,12 @@ jobs:
           echo "Allocated OpenCode port: $OPENCODE_WEB_PORT"
           echo "Allocated project file server port: $PROJECT_FILE_PORT"
           WARP_PROXY=''
+          # Phone-first egress (live WS presence). Quiet skip when available:false.
+          if bash "$RUNTIME_DIR/scripts/device-proxy.sh" "$RUNNER_TEMP/device-proxy" "$OPENCODE_BIN" "$OPENCODE_WEB_DIR" \
+            && WARP_PROXY="$(cat "$RUNNER_TEMP/device-proxy/proxy-url" 2>/dev/null)" && [[ "$WARP_PROXY" == http://127.0.0.1:* ]]; then
+            echo "Device relay ready"
+            echo "- Device relay: on (phone egress)" >> "$GITHUB_STEP_SUMMARY"
+          fi
           # Settings > Enable WARP (on by default) adds the warp label. Default with Fusion
           # (plugin resolved on this run) skips WARP; any picked model or Default without Fusion uses it.
           fusion_on=false
@@ -710,7 +716,7 @@ jobs:
             echo "- WARP: skipped for Default because Fusion runs first (set up lazily before a free model)" >> "$GITHUB_STEP_SUMMARY"
             echo "WARP_LAZY=1" >> "$GITHUB_ENV"
           fi
-          if [[ "$WARP_DECISION" == 'on' ]]; then
+          if [[ "$WARP_DECISION" == 'on' && -z "$WARP_PROXY" ]]; then
             # Free models through Cloudflare WARP IPv6.
             # Only `opencode serve` gets the proxy; GitHub stays on the runner IP.
             if WARP_PROXY="$(bash "$RUNTIME_DIR/scripts/warp-proxy.sh" "$RUNNER_TEMP/warp" "$OPENCODE_BIN" | tail -n 1)" \
