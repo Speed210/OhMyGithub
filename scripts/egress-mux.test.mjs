@@ -109,3 +109,37 @@ test('mux without general: models direct; misc host forbidden; never device', { 
   assert.equal(forbidden, 403)
   assert.equal(totals.forbidden, 1)
 })
+
+// Regression: OpenCode (Bun) resets its keep-alive tunnel when a step ends. The mux used
+// to die with an unhandled 'write EPIPE' and every later model call failed with
+// ECONNREFUSED. It must survive the reset and keep accepting new tunnels on the same port.
+test('mux survives a client reset mid-stream and keeps serving', { timeout: 10000 }, async (t) => {
+  const flooding = createServer()
+  flooding.on('connect', (_req, socket) => {
+    socket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+    const timer = setInterval(() => { try { socket.write(Buffer.alloc(16 * 1024, 120)) } catch {} }, 5)
+    socket.on('close', () => clearInterval(timer))
+    socket.on('error', () => clearInterval(timer))
+  })
+  const dp = await listen(flooding)
+  t.after(() => { try { flooding.closeAllConnections?.() } catch {}; flooding.close() })
+
+  const { server } = createEgressMux({ deviceProxy: `http://127.0.0.1:${dp}` })
+  const mp = await listen(server)
+  t.after(() => server.close())
+
+  const c = connect({ host: '127.0.0.1', port: mp })
+  await once(c, 'connect')
+  c.write('CONNECT opencode.ai:443 HTTP/1.1\r\nHost: opencode.ai:443\r\n\r\n')
+  await once(c, 'data')
+  c.resetAndDestroy()
+  await new Promise(r => setTimeout(r, 150))
+
+  const { res } = await new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: mp, method: 'CONNECT', path: 'opencode.ai:443' })
+    req.on('connect', (res, socket) => { socket.destroy(); resolve({ res }) })
+    req.on('error', reject)
+    req.end()
+  })
+  assert.equal(res.statusCode, 200, 'mux must still accept tunnels after a client reset')
+})

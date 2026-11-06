@@ -298,6 +298,13 @@ export function createDeviceProxyRelay({
       try { s.client.destroy() } catch {}
       return
     }
+    // The phone went away (screen off, network switch, heartbeat loss). Fail every tunnel and
+    // record offline now, so the watcher hands the build to the fallback within a couple of
+    // seconds instead of waiting for the next CONNECT to time out.
+    if (msg.type === 'device_offline') {
+      failAll('offline')
+      return
+    }
     if (msg.type === 'error') {
       totals.last_error = String(msg.code || 'error')
       failAll(msg.code)

@@ -276,3 +276,27 @@ test('sender stalls at 0 credit and resumes on window', { timeout: 10000 }, asyn
   await new Promise(r => setTimeout(r, 10))
   assert.equal(stream.credit, 9, 'second window also adds')
 })
+
+test('device_offline fails the route immediately so the watcher can switch proxies', { timeout: 5000 }, async (t) => {
+  const sock = {
+    readyState: 0, sent: [],
+    send() {}, close() { sock.readyState = 3 },
+    on(ev, fn) { (sock._e ??= new EventEmitter()).on(ev, fn) },
+    once(ev, fn) { (sock._e ??= new EventEmitter()).once(ev, fn) },
+    off(ev, fn) { sock._e?.off(ev, fn) },
+  }
+  queueMicrotask(() => { sock.readyState = 1; sock._e?.emit('open') })
+  const failures = []
+  const { close, totals } = createDeviceProxyRelay({
+    token: 'tok', wsUrl: 'ws://example/x', openSocketImpl: () => sock,
+    onFailure: () => failures.push(totals.last_error),
+  })
+  t.after(() => close())
+  await once(sock, 'open')
+  sock._e.emit('message', JSON.stringify({ v: 1, type: 'ready', user: 'a', max_streams: 8 }), false)
+  assert.equal(totals.last_error, '')
+  sock._e.emit('message', JSON.stringify({ v: 1, type: 'device_offline', code: 'eof' }), false)
+  await new Promise(r => setTimeout(r, 20))
+  assert.equal(totals.last_error, 'offline')
+  assert.deepEqual(failures, ['offline'])
+})

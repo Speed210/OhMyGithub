@@ -57,6 +57,7 @@ Max frame payload: 64 KiB. Larger writes are split across frames.
 {"v":1,"type":"opened","id":1}
 {"v":1,"type":"open_error","id":1,"code":"forbidden"|"refused"|"timeout"|"offline","message":"..."}
 {"v":1,"type":"close","id":1,"reason":"eof"|"error"|"revoke"|"cap"}
+{"v":1,"type":"device_offline","code":"eof"|"revoke"}
 {"v":1,"type":"ping","t":<unix_ms>}
 {"v":1,"type":"pong","t":<unix_ms>}
 {"v":1,"type":"window","id":1,"credit":32}
@@ -69,7 +70,7 @@ Max frame payload: 64 KiB. Larger writes are split across frames.
 3. Phone TCP-connects `host:443` (OS stack = phone public IP); replies `opened` or `open_error`.
 4. a2 tells runner `opened` → local relay answers `HTTP/1.1 200 Connection Established`.
 5. Bidirectional binary frames until `close` or WS drop.
-6. On phone WS drop: a2 sends `open_error/offline` for pending opens and `close` for live streams; runner calls existing `drop-proxy.sh`.
+6. On phone WS drop: a2 sends `device_offline` to the runner, `open_error/offline` for pending opens, and `close` for live streams. The runner records `last_error=offline`, fails every tunnel, and the watcher calls `drop-proxy.sh` within ~2 s — even when no request is in flight.
 
 ### Heartbeat
 - Either side sends `ping` every 15s; expect `pong` within 10s.

@@ -22,7 +22,33 @@ function parseProxyUrl(url) {
   return { host: u.hostname, port: Number(u.port) || (u.protocol === 'https:' ? 443 : 80) }
 }
 
+/**
+ * Tie the two ends together so a reset on either side can never escape as an unhandled
+ * 'error' event. Without this the whole process exits on EPIPE/ECONNRESET and OpenCode,
+ * still pointed at this port, starts failing every model call with ECONNREFUSED.
+ */
+function tieSockets(client, upstream) {
+  const kill = () => {
+    try { client.destroy() } catch {}
+    try { upstream?.destroy() } catch {}
+  }
+  client.on('error', kill)
+  client.on('close', kill)
+  if (upstream) {
+    upstream.on('error', kill)
+    upstream.on('close', kill)
+  }
+  return kill
+}
+
 function connectViaProxy(proxy, target, client, head) {
+  let upstream = null
+  const kill = () => {
+    try { client.destroy() } catch {}
+    try { upstream?.destroy() } catch {}
+  }
+  client.on('error', kill)
+  client.on('close', kill)
   const req = httpRequest({
     host: proxy.host,
     port: proxy.port,
@@ -31,13 +57,21 @@ function connectViaProxy(proxy, target, client, head) {
     headers: { host: target },
   })
   req.on('connect', (res, socket) => {
+    upstream = socket
+    socket.on('error', kill)
+    socket.on('close', kill)
     if (res.statusCode !== 200) {
-      client.end(`HTTP/1.1 ${res.statusCode || 502} Bad Gateway\r\n\r\n`)
-      socket.destroy()
+      try { client.end(`HTTP/1.1 ${res.statusCode || 502} Bad Gateway\r\n\r\n`) } catch {}
+      try { socket.destroy() } catch {}
       return
     }
-    client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
-    if (head?.length) socket.write(head)
+    try {
+      client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      if (head?.length) socket.write(head)
+    } catch {
+      kill()
+      return
+    }
     socket.pipe(client); client.pipe(socket)
   })
   req.on('error', () => { try { client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n') } catch {} })
@@ -54,7 +88,9 @@ export function createEgressMux({ deviceProxy, generalProxy = null, connectDirec
   const totals = { device: 0, general: 0, direct: 0, forbidden: 0 }
 
   const server = createServer((_req, res) => { res.writeHead(405, { connection: 'close' }); res.end() })
+  server.on('error', error => { console.error(`[egress-mux] server error: ${error?.code || error?.message || error}`) })
   server.on('connect', (req, client, head) => {
+    client.on('error', () => {})
     const target = String(req.url || '')
     if (!/^[A-Za-z0-9.-]+:\d{1,5}$/.test(target)) { client.end('HTTP/1.1 400 Bad Request\r\n\r\n'); return }
     const hostname = target.replace(/:\d+$/, '').toLowerCase()
@@ -73,13 +109,18 @@ export function createEgressMux({ deviceProxy, generalProxy = null, connectDirec
       totals.direct++
       const port = Number(target.split(':')[1])
       const upstream = connectDirect({ host: hostname, port })
+      tieSockets(client, upstream)
       upstream.on('connect', () => {
-        client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
-        if (head?.length) upstream.write(head)
+        try {
+          client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+          if (head?.length) upstream.write(head)
+        } catch {
+          upstream.destroy()
+          return
+        }
         upstream.pipe(client); client.pipe(upstream)
       })
       upstream.on('error', () => { try { client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n') } catch {} })
-      client.on('error', () => upstream.destroy())
       return
     }
     totals.forbidden++
@@ -89,15 +130,21 @@ export function createEgressMux({ deviceProxy, generalProxy = null, connectDirec
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const deviceProxy = process.argv[2]
-  const generalProxy = process.argv[3] || ''
-  const portFile = process.argv[4]
+  const positional = []
+  let portOverride = 0
+  for (const arg of process.argv.slice(2)) {
+    if (arg === '--port') portOverride = -1
+    else if (portOverride === -1) { portOverride = Number(arg); }
+    else positional.push(arg)
+  }
+  if (portOverride === -1) { console.error('egress-mux: --port needs a number'); process.exit(2) }
+  const [deviceProxy, generalProxy = '', portFile] = positional
   if (!deviceProxy || !portFile) {
-    console.error('Usage: node egress-mux.mjs <device-proxy-url> [general-proxy-url|\'\'] <port-file>')
+    console.error('Usage: node egress-mux.mjs <device-proxy-url> [general-proxy-url|\'\'] <port-file> [--port N]')
     process.exit(2)
   }
   const { server } = createEgressMux({ deviceProxy, generalProxy: generalProxy || null })
-  server.listen(0, '127.0.0.1', () => {
-    writeFileSync(portFile, String(server.address().port))
+  server.listen(Number(portOverride) || 0, '127.0.0.1', () => {
+    if (!portOverride) writeFileSync(portFile, String(server.address().port))
   })
 }
