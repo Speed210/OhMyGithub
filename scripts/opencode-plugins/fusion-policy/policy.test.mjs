@@ -47,3 +47,10 @@ test('shared-only request kinds route titles separately without changing unrelat
  }
  const other={kind:'title',model:{providerID:'copilot-fusion-direct'},request:new Request('https://elsewhere.test/responses')};hooks['http.request'](other);assert.equal(other.request.headers.get('x-fusion-request-kind'),null)
 })
+
+test('production installs the reviewed immutable denaidark Fusion fork, not a moving main',async()=>{
+ const {readFile}=await import('node:fs/promises');const workflow=await readFile(new URL('../../../.github/workflows/opencode-reusable.yml',import.meta.url),'utf8')
+ assert.match(workflow,/plugin_repo='https:\/\/github\.com\/denaidark\/opencode-copilot-fusion\.git'/)
+ assert.match(workflow,/plugin_commit='16f95e0472ccbde1f3951f00765f1751ba4db80d'/)
+ assert.doesNotMatch(workflow,/git ls-remote \"?\$plugin_repo/)
+})

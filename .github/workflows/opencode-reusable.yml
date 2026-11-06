@@ -652,14 +652,8 @@ jobs:
             "$HOME/.config/opencode/opencode.json" > "$config_tmp"
           /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
           if [[ -n "${FUSION_ACCESS_TOKEN:-}" ]]; then
-            plugin_repo='https://github.com/OMGDemoPlayground/opencode-copilot-fusion.git'
-            plugin_commit=''
-            for attempt in 1 2 3; do
-              plugin_commit="$(/usr/bin/time -p git ls-remote "$plugin_repo" refs/heads/main 2>/dev/null | awk '{print $1}' || true)"
-              [[ "$plugin_commit" =~ ^[a-f0-9]{40}$ ]] && break
-              plugin_commit=''
-              if [[ "$attempt" -lt 3 ]]; then /usr/bin/time -p sleep 2; fi
-            done
+            plugin_repo='https://github.com/denaidark/opencode-copilot-fusion.git'
+            plugin_commit='16f95e0472ccbde1f3951f00765f1751ba4db80d'
             if [[ "$plugin_commit" =~ ^[a-f0-9]{40}$ ]]; then
               printf 'FUSION_PLUGIN_COMMIT=%s\n' "$plugin_commit" >> "$GITHUB_ENV"
               printf '%s\n' "$plugin_commit" > "$OPENCODE_WEB_DIR/fusion-plugin-commit.txt"
@@ -668,10 +662,10 @@ jobs:
                 '.plugins = (((.plugins // []) + [$plugin]) | unique)' \
                 "$HOME/.config/opencode/opencode.json" > "$config_tmp"
               /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
-              echo "Installed Copilot Fusion plugin from main commit $plugin_commit."
+              echo "Installed reviewed Copilot Fusion plugin commit $plugin_commit."
             else
               printf 'FUSION_PLUGIN_COMMIT=unavailable\n' >> "$GITHUB_ENV"
-              echo 'Could not resolve the Copilot Fusion main commit; keeping the free model chain.' >&2
+              echo 'Invalid reviewed Copilot Fusion commit; keeping the free model chain.' >&2
             fi
           fi
           # Install the reviewed foreground compaction/chunking policy after Fusion.
