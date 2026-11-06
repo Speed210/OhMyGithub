@@ -20,6 +20,9 @@ export function buildStats(directory, now = Date.now()) {
   }
   const model = readText(directory, 'main-model')
   if (model) stats.model = model
+  // Pinned runner commit for this build, so the project page can show which runtime ran it.
+  const runtime = readText(directory, 'runtime-ref.txt')
+  if (/^[a-f0-9]{40}$/i.test(runtime)) stats.runtime = runtime.toLowerCase()
   const attempts = readJson(directory, 'model-attempts.json')
   if (Array.isArray(attempts) && attempts.length) {
     stats.attempts = attempts.slice(-MAX_ATTEMPTS).map(({ model, outcome, code, error_class, duration_ms }) => ({ model, outcome, code, ...(error_class ? { error_class } : {}), duration_ms }))
