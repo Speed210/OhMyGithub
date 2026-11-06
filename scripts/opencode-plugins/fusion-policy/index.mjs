@@ -1,7 +1,7 @@
 // Companion-runner plugin artifact. A2 web deployment does not install runner plugins.
 export const FUSION_RUNNER_POLICY = Object.freeze({ compactionAttempts: 3, compactionMs: 300000, writeChunkChars: 12000 })
 export const LARGE_FILE_GUIDANCE = 'For large files, first write a small working skeleton, then use focused edits or append chunks of at most 12000 characters. Never send an entire large game in one write-tool call. Each tool argument must finish within the model output budget. After an output-length failure, switch to smaller chunks or edits rather than retrying the same giant write. Validate syntax and the final file after the last chunk.'
-export function createFusionRunnerPolicy({ now = Date.now, log = message => console.warn(message) } = {}) {
+export function createFusionRunnerPolicy({ now = Date.now, log = message => console.warn(message), upstream = process.env.FUSION_UPSTREAM || '' } = {}) {
   const operations = new Map(), provider = 'copilot-fusion-direct'
   const start = id => { const value = { attempts: 0, started: now() }; operations.delete(id); operations.set(id, value); while (operations.size > 512) operations.delete(operations.keys().next().value); return value }
   const isFusion = event => event.model?.providerID === provider
@@ -16,6 +16,13 @@ export function createFusionRunnerPolicy({ now = Date.now, log = message => cons
       await context.session.hook('compaction', event => { if (isFusion(event)) start(event.sessionID) }, { providerID: provider })
       await context.session.hook('http.request', event => {
         if (!isFusion(event)) return
+        try {
+          const proxy = new URL(upstream)
+          if (proxy.pathname.startsWith('/api/fusion-pool') && new URL(event.request.url).origin === proxy.origin && ['primary', 'title', 'compaction', 'generate'].includes(event.kind)) {
+            const headers = new Headers(event.request.headers); headers.set('x-fusion-request-kind', event.kind)
+            event.request = new Request(event.request, { headers })
+          }
+        } catch {}
         if (event.kind === 'primary') { operations.delete(event.sessionID); return }
         if (event.kind !== 'compaction') return
         const operation = operations.get(event.sessionID) || start(event.sessionID)

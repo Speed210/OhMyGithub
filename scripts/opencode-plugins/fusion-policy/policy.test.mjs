@@ -39,3 +39,11 @@ test('a previous foreground budget cannot suppress normal primary or other-agent
   hooks['http.request']({...event,kind:'primary'})
   const retry={...event,decision:{retry:true,delay:0}};hooks.retry(retry);assert.equal(retry.decision.retry,true)
 })
+
+test('shared-only request kinds route titles separately without changing unrelated requests',async()=>{
+ const hooks={};await createFusionRunnerPolicy({upstream:'https://proxy.test/api/fusion-pool',log:()=>{}}).setup({session:{hook:async(name,fn)=>{hooks[name]=fn}}})
+ for(const kind of ['primary','title','compaction','generate']){
+ const event={kind,sessionID:'s',model:{providerID:'copilot-fusion-direct'},request:new Request('https://proxy.test/responses',{method:'POST',body:'{}'})};hooks['http.request'](event);assert.equal(event.request.headers.get('x-fusion-request-kind'),kind)
+ }
+ const other={kind:'title',model:{providerID:'copilot-fusion-direct'},request:new Request('https://elsewhere.test/responses')};hooks['http.request'](other);assert.equal(other.request.headers.get('x-fusion-request-kind'),null)
+})
