@@ -371,7 +371,9 @@ jobs:
           printf 'OPENCODE_PASSWORD=%s\nGOAL_REQUEST=false\nRALPH_REQUEST=false\nOMO_REQUEST=false\n' "$password" >> "$GITHUB_ENV"
 
       - name: Configure Linux Playwright CLI with WebGPU
-        timeout-minutes: 8
+        # 8 minutes killed run #56: the Azure apt mirror dropped to ~18 kB/s and the
+        # mesa/font downloads alone took 13 minutes. Keep a bound, but leave room.
+        timeout-minutes: 20
         if: runner.os == 'Linux'
         shell: bash
         run: |

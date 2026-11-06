@@ -9,8 +9,11 @@ Acquire::Retries "1";
 Acquire::http::Timeout "20";
 Acquire::https::Timeout "20";
 APT
-/usr/bin/time -p timeout --kill-after=10s 180s sudo -n apt-get update
-/usr/bin/time -p sudo -n apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb xauth lsof
+/usr/bin/time -p timeout --kill-after=10s 300s sudo -n apt-get update
+# Bound the install too: a stalled mirror once held this for six minutes with no network activity,
+# leaving the run without a heartbeat. Continue without the GPU stack rather than hang the build.
+/usr/bin/time -p timeout --kill-after=10s 900s sudo -n apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb xauth lsof \
+  || { echo '::warning title=Playwright GPU packages::apt-get install did not finish in 15 minutes; continuing without mesa-vulkan-drivers'; sudo -n dpkg --configure -a || true; }
 /usr/bin/time -p npm install --prefix "$runtime" --no-save --no-package-lock @playwright/cli@0.1.19 playwright
 /usr/bin/time -p "$runtime/node_modules/.bin/playwright" install --with-deps chromium
 /usr/bin/time -p tee "$runtime/linux.json" >/dev/null <<JSON
