@@ -223,3 +223,7 @@ test('forced shared overrides inherited free labels, fails closed without plugin
 test('normal shared and own Fusion primaries cannot silently fall through after auxiliary free quota; own explicit free choices remain honored',async()=>{
  assert.deepEqual(resolveRunModels({fusionEnabled:true,route:'own'}).models,[fusionModel]);assert.equal(resolveRunModels({selected:preferredFreeModels[0],fusionEnabled:true,route:'own'}).model,preferredFreeModels[0]);const f=await fixture(['quota','success']);try{const r=await runModels({...f.options,selected:fusionModel,models:[fusionModel,...preferredFreeModels],env:{...f.options.env,FUSION_ROUTE:'own'}});assert.equal(r.attempts.length,1);assert.equal(r.attempts[0].model,fusionModel);assert.equal(r.code,1)}finally{f.close()}
 })
+
+test('normal shared fixes free-first labels without overriding explicit connected providers; admin force overrides both',()=>{
+ assert.deepEqual(resolveRunModels({selected:'openai/gpt-6-astra',fusionEnabled:true,requireShared:true}).models,['openai/gpt-6-astra',fusionModel]);assert.deepEqual(resolveRunModels({selected:'openai/gpt-6-astra',fusionEnabled:true,requireShared:true,forceSharedTest:true}).models,[fusionModel])
+})

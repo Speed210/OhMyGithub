@@ -57,6 +57,7 @@ export function createCredentialClient({ env = process.env, request = fetch, mas
     if (data.fusion_required === true && (data.fusion_route !== 'shared' || !data.secrets?.FUSION_ACCESS_TOKEN)) throw new Error('Required shared Fusion unavailable; refusing free-model fallback')
     writeEnv(env.GITHUB_ENV, 'FUSION_ROUTE', ['own', 'shared', 'none'].includes(data.fusion_route) ? data.fusion_route : 'none')
     writeEnv(env.GITHUB_ENV, 'FUSION_REQUIRE_SHARED', data.fusion_required === true ? 'true' : 'false')
+    writeEnv(env.GITHUB_ENV, 'FUSION_FORCE_SHARED_TEST', data.fusion_force_test === true ? 'true' : 'false')
     if (data.debug_ssh_public_key && !env.AGENTSWEB_SSH_PUBLIC_KEY) {
       if (!/^ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?$/.test(data.debug_ssh_public_key)) throw new Error('Invalid debug public key')
       writeEnv(env.GITHUB_ENV, 'AGENTSWEB_SSH_PUBLIC_KEY', data.debug_ssh_public_key)

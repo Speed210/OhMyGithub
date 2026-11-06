@@ -24,9 +24,11 @@ export function modelCandidates(selected, live = null, chain = defaultModelChain
 }
 // Admin force mode is an explicit test contract, not a normal user model preference.
 // Continuations copy model/* labels, so both label resolution and execution enforce it.
-export function resolveRunModels({ selected, live = null, fusionEnabled = false, requireShared = false, route = 'none' }) {
+export function resolveRunModels({ selected, live = null, fusionEnabled = false, requireShared = false, forceSharedTest = false, route = 'none' }) {
   if (requireShared) {
     if (!fusionEnabled) throw new Error('Required shared Fusion plugin unavailable; refusing free-model fallback')
+    // Preserve an explicit connected paid-provider choice outside admin test mode.
+    if (selected && selected !== fusionModel && !freeEgressModel(selected) && !forceSharedTest) return { model: selected, models: [selected, fusionModel] }
     return { model: fusionModel, models: [fusionModel] }
   }
   const chain = defaultModelChain(fusionEnabled)
@@ -151,7 +153,8 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const requiredShared = env.FUSION_REQUIRE_SHARED === 'true'
   if (requiredShared && env.FUSION_ROUTE !== 'shared') throw new Error('Required shared Fusion route unavailable')
-  const candidates = requiredShared || env.FUSION_ROUTE === 'own' && selected === fusionModel ? [fusionModel] : [...new Set(models)]
+  const strictFusion = requiredShared && (env.FUSION_FORCE_SHARED_TEST === 'true' || !selected || selected === fusionModel || freeEgressModel(selected)) || env.FUSION_ROUTE === 'own' && selected === fusionModel
+  const candidates = strictFusion ? [fusionModel] : [...new Set(models)].filter(model => !requiredShared || !freeEgressModel(model))
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
   // Preserve the existing connected OpenRouter fallback after the free-model chain.
   if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes(openrouterFallbackModel)) candidates.push(openrouterFallbackModel)
