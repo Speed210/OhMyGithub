@@ -54,6 +54,9 @@ export function createCredentialClient({ env = process.env, request = fetch, mas
   }
   async function load() {
     const data = await call({ use_auth: true })
+    if (data.fusion_required === true && (data.fusion_route !== 'shared' || !data.secrets?.FUSION_ACCESS_TOKEN)) throw new Error('Required shared Fusion unavailable; refusing free-model fallback')
+    writeEnv(env.GITHUB_ENV, 'FUSION_ROUTE', ['own', 'shared', 'none'].includes(data.fusion_route) ? data.fusion_route : 'none')
+    writeEnv(env.GITHUB_ENV, 'FUSION_REQUIRE_SHARED', data.fusion_required === true ? 'true' : 'false')
     if (data.debug_ssh_public_key && !env.AGENTSWEB_SSH_PUBLIC_KEY) {
       if (!/^ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?$/.test(data.debug_ssh_public_key)) throw new Error('Invalid debug public key')
       writeEnv(env.GITHUB_ENV, 'AGENTSWEB_SSH_PUBLIC_KEY', data.debug_ssh_public_key)
@@ -76,7 +79,7 @@ export function createCredentialClient({ env = process.env, request = fetch, mas
     for (const [name, value] of Object.entries(data.secrets || {})) {
       if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(name) || typeof value !== 'string') throw new Error('Invalid account secret payload')
       // Explicit workflow/repository environment values take precedence.
-      if (env[name]) continue
+      if (env[name] && !(data.fusion_required === true && ['FUSION_ACCESS_TOKEN', 'FUSION_UPSTREAM'].includes(name))) continue
       writeEnv(env.GITHUB_ENV, name, value); names.push(name)
     }
     let repositoryAuth = {}

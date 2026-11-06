@@ -896,9 +896,8 @@ jobs:
             }
             // Free OpenCode models get retired (the API then answers "ModelDeprecated" and
             // OpenCode reports "Unexpected server error"). Pick a live default from the catalog.
-            const { preferredFreeModels: preferred, modelCandidates, defaultModelChain } = await import(`${process.env.RUNTIME_DIR}/scripts/run-with-model-fallback.mjs`);
+            const { resolveRunModels } = await import(`${process.env.RUNTIME_DIR}/scripts/run-with-model-fallback.mjs`);
             const fusionEnabled = /^[a-f0-9]{40}$/.test(String(process.env.FUSION_PLUGIN_COMMIT || ''));
-            const chain = defaultModelChain(fusionEnabled);
             let live = null;
             try {
               const catalog = await (await fetch('https://models.opencode.ai/api.json', { signal: AbortSignal.timeout(15000) })).json();
@@ -906,20 +905,16 @@ jobs:
                 .filter(([, row]) => row.status !== 'deprecated' && row.tool_call === true && row.cost?.input === 0 && row.cost?.output === 0)
                 .map(([id]) => `opencode/${id}`);
             } catch (error) { core.warning(`OpenCode model catalog unavailable: ${error.message}`); }
-            const usable = (id) => !live || !id.startsWith('opencode/') || id.endsWith('-free') === false || live.includes(id);
-            const fallback = chain.find((id) => !live || !id.startsWith('opencode/') || live.includes(id)) || chain[0];
-            let model = modelLabels[0]?.slice('model/'.length) || fallback;
-            if (!usable(model)) {
-              core.warning(`Model ${model} is deprecated or unavailable; using ${fallback} instead.`);
-              model = fallback;
-            }
+            const requireShared = process.env.FUSION_REQUIRE_SHARED === 'true';
+            const { model, models } = resolveRunModels({ selected: modelLabels[0]?.slice('model/'.length), live, fusionEnabled, requireShared });
+            if (requireShared) core.info('Admin force-shared policy overrides inherited model labels; primary cannot fall back to a free provider.');
             const skills = names.filter((name) => name.startsWith('skill/'))
               .map((name) => name.slice('skill/'.length)).sort();
             core.setOutput('model', model);
-            core.setOutput('models_json', JSON.stringify(modelCandidates(model, live, chain)));
+            core.setOutput('models_json', JSON.stringify(models));
             core.setOutput('variant', ['openai/gpt-6.1-sol', 'openai/gpt-6-astra'].includes(model) ? 'high' : '');
             core.setOutput('skills_json', JSON.stringify(skills));
-            core.info(`Resolved model=${model}; fusion=${fusionEnabled}; sequence=${modelCandidates(model, live, chain).join(' → ')}; skills=${skills.join(', ') || '(none)'}`);
+            core.info(`Resolved model=${model}; fusion=${fusionEnabled}; sequence=${models.join(' → ')}; skills=${skills.join(', ') || '(none)'}`);
 
       - name: Restore saved OpenCode conversation
         if: env.RESUME_CHECKPOINT_FILE != '' && env.TEST_REQUEST != 'true' && env.SSH_ONLY_REQUEST != 'true'

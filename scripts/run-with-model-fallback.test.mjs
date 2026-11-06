@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runModels, modelCandidates, preferredFreeModels, retryableProviderError, terminalAttemptOutcome, defaultModelChain, fusionFallbackError, fusionModel } from './run-with-model-fallback.mjs'
+import { runModels, modelCandidates, preferredFreeModels, retryableProviderError, terminalAttemptOutcome, defaultModelChain, fusionFallbackError, fusionModel, resolveRunModels } from './run-with-model-fallback.mjs'
 
 test('default chain order comes from model-chain.json; picked models fall back to it', () => {
   const [deepseek, glm, mimo, pickle] = preferredFreeModels
@@ -211,4 +211,11 @@ test('dead proxy (502 Upstream Proxy Error / TRAFFIC_EXHAUSTED) drops the proxy 
     const result = await runModels({ ...g.options, dropProxy: null })
     assert.equal(result.attempts.length, 1, 'no proxy to drop: stop as before')
   } finally { g.close() }
+})
+
+test('forced shared overrides inherited free labels, fails closed without plugin and never falls through on quota/auth',async()=>{
+ assert.deepEqual(resolveRunModels({selected:preferredFreeModels[0],fusionEnabled:true,requireShared:true}),{model:fusionModel,models:[fusionModel]})
+ assert.throws(()=>resolveRunModels({selected:preferredFreeModels[0],fusionEnabled:false,requireShared:true}),/unavailable/)
+ assert.equal(resolveRunModels({selected:preferredFreeModels[0],fusionEnabled:true}).model,preferredFreeModels[0])
+ for(const pattern of [['success'],['fusion-auth'],['quota']]){const f=await fixture(pattern,'ses_restored');try{const result=await runModels({...f.options,env:{...f.options.env,FUSION_REQUIRE_SHARED:'true',FUSION_ROUTE:'shared',OPENROUTER_API_KEY:'configured'}});assert.equal(result.attempts.length,1);assert.equal(result.attempts[0].model,fusionModel);const calls=JSON.parse(readFileSync(join(f.directory,'calls.json')));assert.equal(calls[0][calls[0].indexOf('--model')+1],fusionModel);assert.equal(calls[0][calls[0].indexOf('--session')+1],'ses_restored')}finally{f.close()}}
 })

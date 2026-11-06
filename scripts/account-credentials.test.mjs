@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCredentialClient, writeEnv, escapeCommand } from './account-credentials.mjs'
 const initial = { openai: { type: 'oauth', access: 'initial-access', refresh: 'initial-refresh', expires: 123 } }
-function fixture(t, extra = {}, account = initial, debugKey) {
+function fixture(t, extra = {}, account = initial, debugKey, metadata = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'credential-client-')); t.after(() => rmSync(dir, { force: true, recursive: true }))
   const env = { RUNNER_TEMP: dir, HOME: dir, GITHUB_ENV: join(dir, 'env'), GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', TRIGGER_ISSUE_NUMBER: '5', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://identity.test/token', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request-token', ...extra }
   const calls = [], masks = []
@@ -13,7 +13,7 @@ function fixture(t, extra = {}, account = initial, debugKey) {
     if (String(url).startsWith('https://identity.test')) return Response.json({ value: 'signed-oidc' })
     assert.equal(options.headers.authorization, 'Bearer signed-oidc')
     const body = JSON.parse(options.body); calls.push(body)
-    return Response.json(body.operation === 'refresh' ? { revision: 'revision-2' } : { debug_ssh_public_key: debugKey, revision: 'revision-1', auth: body.use_auth ? account : null, secrets: { CUSTOM_SERVICE: 'secret\nmultiline', EXISTING_KEY: 'account-value' } })
+    return Response.json(body.operation === 'refresh' ? { revision: 'revision-2' } : { ...metadata, debug_ssh_public_key: debugKey, revision: 'revision-1', auth: body.use_auth ? account : null, secrets: { CUSTOM_SERVICE: 'secret\nmultiline', EXISTING_KEY: 'account-value', ...metadata.secrets } })
   } })
   return { dir, env, calls, masks, client, file: join(dir, '.local/share/opencode/auth.json') }
 }
@@ -43,13 +43,12 @@ test('environment file delimiters and workflow masking escape command characters
   assert.match(readFileSync(file, 'utf8'), /^CUSTOM_KEY<<omgithub_/)
   assert.equal(escapeCommand('a%\r\nb'), 'a%25%0D%0Ab')
 })
-test('High models set CLI reasoning variant in all OpenCode invocation modes', () => {
+test('workflow exports the selected high reasoning variant to the native v2 runner environment', () => {
   const workflow = readFileSync(new URL('../.github/workflows/opencode-reusable.yml', import.meta.url), 'utf8')
   assert.match(workflow, /\['openai\/gpt-6.1-sol', 'openai\/gpt-6-astra'\].includes\(model\) \? 'high'/)
-  assert.match(workflow, /variant_args=\(--variant "\$OPENCODE_VARIANT"\)/)
-  const invocations = workflow.split('\n').filter(line => line.includes('"$1" run'))
-  assert.equal(invocations.length, 5)
-  for (const line of invocations) assert.ok(line.includes('"${variant_args[@]}"'))
+  assert.ok(workflow.includes('OPENCODE_VARIANT: ${{ steps.opencode_labels.outputs.variant }}'))
+  // The old five v1 bash invocations were removed by the native v2 migration.
+  assert.ok(workflow.includes('node "$RUNTIME_DIR/scripts/run-with-model-fallback.mjs"'))
 })
 
 
@@ -194,3 +193,9 @@ test('load debug authorization before SSH and start SSH before package installat
   assert.ok(workflow.indexOf('name: Start AgentsWeb SSH session') < workflow.indexOf('name: Configure Linux Playwright'))
   assert.ok(workflow.includes('printf \'%s\\n\' "$AGENTSWEB_SSH_PUBLIC_KEY"'))
 })
+
+ test('required shared metadata is exported without treating policy words as secrets, unavailable pool fails closed',async t=>{
+ const good=fixture(t,{FUSION_ACCESS_TOKEN:'repository-own',FUSION_UPSTREAM:'https://direct.test'},initial,undefined,{fusion_route:'shared',fusion_required:true,secrets:{FUSION_ACCESS_TOKEN:'test_run_cap',FUSION_UPSTREAM:'https://omgithub.com/api/fusion-pool'}})
+ await good.client.load();assert.match(readFileSync(good.env.GITHUB_ENV,'utf8'),/FUSION_REQUIRE_SHARED<<[^\n]+\ntrue\n/);assert.ok(good.masks.includes('test_run_cap'));assert.ok(!good.masks.includes('shared'));assert.match(readFileSync(good.env.GITHUB_ENV,'utf8'),/FUSION_ACCESS_TOKEN<<[^\n]+\ntest_run_cap\n/);assert.match(readFileSync(good.env.GITHUB_ENV,'utf8'),/FUSION_UPSTREAM<<[^\n]+\nhttps:\/\/omgithub.com\/api\/fusion-pool\n/);const bad=fixture(t,{},initial,undefined,{fusion_route:'none',fusion_required:true});await assert.rejects(bad.client.load(),/Required shared Fusion unavailable/)
+ const f=fixture(t,{},initial,undefined,{fusion_route:'shared',fusion_required:false});await f.client.load();const text=readFileSync(f.env.GITHUB_ENV,'utf8');assert.match(text,/FUSION_ROUTE<<[^\n]+\nshared\n/);assert.match(text,/FUSION_REQUIRE_SHARED<<[^\n]+\nfalse\n/);assert.ok(!f.masks.includes('shared'))
+ })

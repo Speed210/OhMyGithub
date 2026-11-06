@@ -22,6 +22,19 @@ export function modelCandidates(selected, live = null, chain = defaultModelChain
   const rest = liveOnly.some(model => preferredFreeModels.includes(model)) ? liveOnly : ordered
   return [...new Set([selected, ...rest].filter(Boolean))]
 }
+// Admin force mode is an explicit test contract, not a normal user model preference.
+// Continuations copy model/* labels, so both label resolution and execution enforce it.
+export function resolveRunModels({ selected, live = null, fusionEnabled = false, requireShared = false }) {
+  if (requireShared) {
+    if (!fusionEnabled) throw new Error('Required shared Fusion plugin unavailable; refusing free-model fallback')
+    return { model: fusionModel, models: [fusionModel] }
+  }
+  const chain = defaultModelChain(fusionEnabled)
+  const fallback = chain.find(id => !live || !id.startsWith('opencode/') || live.includes(id)) || chain[0]
+  const usable = id => !live || !id.startsWith('opencode/') || !id.endsWith('-free') || live.includes(id)
+  const model = selected && usable(selected) ? selected : fallback
+  return { model, models: modelCandidates(model, live, chain) }
+}
 export function retryableProviderError(error) {
   if (!error || typeof error !== 'object') return false
   const type = String(error.type || ''), message = String(error.message || '')
@@ -136,7 +149,9 @@ export function proxyDrop({ env = process.env, binary, logFile }) {
 }
 export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, switchProxy = runtimeProxySwitch({ env, binary, logFile }), dropProxy, lazyProxy = lazyProxySetup({ env, binary, logFile }) }) {
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
-  const candidates = [...new Set(models)]
+  const requiredShared = env.FUSION_REQUIRE_SHARED === 'true'
+  if (requiredShared && env.FUSION_ROUTE !== 'shared') throw new Error('Required shared Fusion route unavailable')
+  const candidates = requiredShared ? [fusionModel] : [...new Set(models)]
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
   // Preserve the existing connected OpenRouter fallback after the free-model chain.
   if (candidates.some(model => preferredFreeModels.includes(model)) && env.OPENROUTER_API_KEY && !candidates.includes(openrouterFallbackModel)) candidates.push(openrouterFallbackModel)
