@@ -906,8 +906,8 @@ jobs:
                 .map(([id]) => `opencode/${id}`);
             } catch (error) { core.warning(`OpenCode model catalog unavailable: ${error.message}`); }
             const requireShared = process.env.FUSION_REQUIRE_SHARED === 'true';
-            const { model, models } = resolveRunModels({ selected: modelLabels[0]?.slice('model/'.length), live, fusionEnabled, requireShared });
-            if (requireShared) core.info('Admin force-shared policy overrides inherited model labels; primary cannot fall back to a free provider.');
+            const { model, models } = resolveRunModels({ selected: modelLabels[0]?.slice('model/'.length), live, fusionEnabled, requireShared, route: process.env.FUSION_ROUTE });
+            if (requireShared) core.info('Shared Fusion checkout overrides inherited model labels; primary cannot fall back to a free provider.');
             const skills = names.filter((name) => name.startsWith('skill/'))
               .map((name) => name.slice('skill/'.length)).sort();
             core.setOutput('model', model);

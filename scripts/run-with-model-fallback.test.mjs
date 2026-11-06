@@ -219,3 +219,7 @@ test('forced shared overrides inherited free labels, fails closed without plugin
  assert.equal(resolveRunModels({selected:preferredFreeModels[0],fusionEnabled:true}).model,preferredFreeModels[0])
  for(const pattern of [['success'],['fusion-auth'],['quota']]){const f=await fixture(pattern,'ses_restored');try{const result=await runModels({...f.options,env:{...f.options.env,FUSION_REQUIRE_SHARED:'true',FUSION_ROUTE:'shared',OPENROUTER_API_KEY:'configured'}});assert.equal(result.attempts.length,1);assert.equal(result.attempts[0].model,fusionModel);const calls=JSON.parse(readFileSync(join(f.directory,'calls.json')));assert.equal(calls[0][calls[0].indexOf('--model')+1],fusionModel);assert.equal(calls[0][calls[0].indexOf('--session')+1],'ses_restored')}finally{f.close()}}
 })
+
+test('normal shared and own Fusion primaries cannot silently fall through after auxiliary free quota; own explicit free choices remain honored',async()=>{
+ assert.deepEqual(resolveRunModels({fusionEnabled:true,route:'own'}).models,[fusionModel]);assert.equal(resolveRunModels({selected:preferredFreeModels[0],fusionEnabled:true,route:'own'}).model,preferredFreeModels[0]);const f=await fixture(['quota','success']);try{const r=await runModels({...f.options,selected:fusionModel,models:[fusionModel,...preferredFreeModels],env:{...f.options.env,FUSION_ROUTE:'own'}});assert.equal(r.attempts.length,1);assert.equal(r.attempts[0].model,fusionModel);assert.equal(r.code,1)}finally{f.close()}
+})
