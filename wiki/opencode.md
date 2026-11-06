@@ -65,3 +65,10 @@ Preserve the issue account and MCP selection when recovering an existing issue w
 ## Enable account debugging
 
 Load account credentials before SSH startup. Use the issue-authorized default public key only when Debug mode was enabled at issue creation and the repository key is absent. Preserve configured repository keys. Start SSH before package installation. Keep private keys outside Actions.
+
+
+## Fusion large files and compaction budget
+
+Load the bundled `scripts/opencode-plugins/fusion-policy` promise plugin after the Copilot Fusion plugin. It adds Fusion-only system/tool guidance: write a working skeleton, then focused edits or append chunks of at most 12,000 characters, never repeat a truncated giant write. Foreground compaction has a hardcoded three-request/five-minute operation budget, logs attempts explicitly, and returns a visible non-retryable error when exhausted. Keep experimental background compaction disabled for this policy. Ordinary primary retries are not suppressed by a previous operation. The model output limit remains 8,000 pending genuine upstream budget verification.
+
+Validate with `node --test scripts/opencode-plugins/fusion-policy/policy.test.mjs` and the checkpoint/build/lifecycle/preparation/reporting tests. Publishing main makes the policy available to newly resolved immutable central workflow SHAs; existing running jobs stay pinned to their original runtime commit. Roll back a published policy with a normal revert commit, never a force-push.

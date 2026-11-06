@@ -674,6 +674,13 @@ jobs:
               echo 'Could not resolve the Copilot Fusion main commit; keeping the free model chain.' >&2
             fi
           fi
+          # Install the reviewed foreground compaction/chunking policy after Fusion.
+          fusion_policy="$RUNTIME_DIR/scripts/opencode-plugins/fusion-policy"
+          [[ -f "$fusion_policy/index.mjs" ]]
+          /usr/bin/time -p jq --arg plugin "$fusion_policy" \
+            '.plugins = ((.plugins // []) + [$plugin]) | .experimental.background_compaction = false' \
+            "$HOME/.config/opencode/opencode.json" > "$config_tmp"
+          /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
           PORTS="$(node --input-type=module -e '
             import net from "node:net";
             const ports = [];
