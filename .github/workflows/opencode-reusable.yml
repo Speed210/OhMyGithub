@@ -653,13 +653,13 @@ jobs:
           /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
           if [[ -n "${FUSION_ACCESS_TOKEN:-}" ]]; then
             plugin_repo='https://github.com/denaidark/opencode-copilot-fusion.git'
-            plugin_commit='16f95e0472ccbde1f3951f00765f1751ba4db80d'
+            plugin_commit='8275beda04bbfaa395c073a6b83f89c93801bca2'
             if [[ "$plugin_commit" =~ ^[a-f0-9]{40}$ ]]; then
               printf 'FUSION_PLUGIN_COMMIT=%s\n' "$plugin_commit" >> "$GITHUB_ENV"
               printf '%s\n' "$plugin_commit" > "$OPENCODE_WEB_DIR/fusion-plugin-commit.txt"
               printf '[fusion-plugin] commit=%s\n' "$plugin_commit" >> "$OPENCODE_WEB_DIR/opencode-run.log"
               /usr/bin/time -p jq --arg plugin "git+$plugin_repo#$plugin_commit" \
-                '.plugins = (((.plugins // []) + [$plugin]) | unique)' \
+                '.plugins = (((.plugins // []) + [$plugin]) | unique) | .small_model = "copilot-fusion-direct/fusion" | .agents.title.model = "copilot-fusion-direct/fusion" | .agents.compaction.model = "copilot-fusion-direct/fusion"' \
                 "$HOME/.config/opencode/opencode.json" > "$config_tmp"
               /usr/bin/time -p mv "$config_tmp" "$HOME/.config/opencode/opencode.json"
               echo "Installed reviewed Copilot Fusion plugin commit $plugin_commit."
