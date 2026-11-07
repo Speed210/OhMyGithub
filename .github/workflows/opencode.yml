@@ -27,15 +27,33 @@ jobs:
     uses: ./.github/workflows/opencode-prepare.yml
     with:
       runtime_ref: ${{ github.workflow_sha }}
-  opencode:
+
+  authenticate:
     needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      opencode_token: ${{ steps.login.outputs.token }}
+    steps:
+      - name: Sign in to OpenCode
+        id: login
+        env:
+          AUDIENCE: https://opencode.ai/console
+        run: |
+          oidc=$(curl -sSf --oauth2-bearer "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r .value)
+          token=$(curl -sSf https://opencode.ai/auth/oauth/token \
+            -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+            -d subject_token_type=urn:ietf:params:oauth:token-type:jwt \
+            -d client_id=sk_107ed9ff-00c9-41bb-814e-afd96dff0173 \
+            -d subject_token="$oidc" | jq -r .access_token)
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+
+  opencode:
+    needs: [prepare, authenticate]
     if: needs.prepare.outputs.approved == 'true'
     uses: ./.github/workflows/opencode-reusable.yml
-    permissions:
-      id-token: write
-      contents: write
-      issues: write
-      actions: read
     with:
       runtime_ref: ${{ github.workflow_sha }}
       issue_number: ${{ needs.prepare.outputs.issue_number }}
@@ -45,4 +63,5 @@ jobs:
       sender: ${{ needs.prepare.outputs.sender }}
       target_ref: ${{ needs.prepare.outputs.target_ref }}
       target_sha: ${{ needs.prepare.outputs.target_sha }}
-    secrets: inherit
+    secrets:
+      OPENCODE_API_KEY: ${{ needs.authenticate.outputs.opencode_token }}
