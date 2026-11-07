@@ -75,6 +75,16 @@ export function createCredentialClient({ env = process.env, request = fetch, mas
       writeEnv(env.GITHUB_ENV, 'OPENCODE_CONFIG_CONTENT', content)
       save(mcpFile, { names: Object.keys(mcp) })
     }
+    const providers = data.providers || {}
+    if (Object.keys(providers).length) {
+      let configured = {}
+      if (env.OPENCODE_CONFIG_CONTENT) {
+        try { configured = JSON.parse(env.OPENCODE_CONFIG_CONTENT) } catch { throw new Error('Enter valid JSON in OPENCODE_CONFIG_CONTENT before adding custom providers') }
+      }
+      // Explicit workflow entries win; account custom endpoints fill in the rest.
+      const content = JSON.stringify({ ...configured, providers: { ...providers, ...configured.providers } })
+      writeEnv(env.GITHUB_ENV, 'OPENCODE_CONFIG_CONTENT', content)
+    }
     remember(data.secrets)
     const names = []
     for (const [name, value] of Object.entries(data.secrets || {})) {

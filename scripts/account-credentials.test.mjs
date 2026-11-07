@@ -112,6 +112,17 @@ test('MCP-only accounts configure OpenCode outside the checkout, mask run creden
   assert.equal(existsSync(join(f.dir, 'omgithub-account-credentials/mcp.json')), false)
 })
 
+test('custom endpoint providers merge into OpenCode config without replacing workflow providers', async t => {
+  const providers = { acme: { name: 'Acme', package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: 'https://llm.acme.test/v1' }, models: { coder: { name: 'Coder' } } } }
+  const f = fixture(t, { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'test/model', providers: { workflow: { name: 'Workflow' } } }) }, initial, undefined, { providers })
+  await f.client.load()
+  const output = readFileSync(f.env.GITHUB_ENV, 'utf8'), match = output.match(/OPENCODE_CONFIG_CONTENT<<[^\n]+\n([^\n]+)/)
+  const config = JSON.parse(match[1])
+  assert.equal(config.model, 'test/model')
+  assert.deepEqual(config.providers.workflow, { name: 'Workflow' })
+  assert.deepEqual(config.providers.acme, providers.acme)
+})
+
 
 test('import missing Go providers beside repository OpenAI auth without syncing repository overrides', async t => {
   const repository = { openai: { type: 'api', key: 'repository-openai' } }
