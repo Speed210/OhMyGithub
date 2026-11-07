@@ -824,22 +824,18 @@ jobs:
           export PROJECT_FILE_PORT
           /usr/bin/time -p bash "$RUNTIME_DIR/scripts/start-live-files.sh"
           echo 'Tunnel OpenCode, live source files, and final preview independently'
+          FRP_VERSION='0.71.1'
           case "$RUNNER_OS/$RUNNER_ARCH" in
-            Linux/X64) CLOUDFLARED_ASSET='cloudflared-linux-amd64' ;;
-            Linux/ARM64) CLOUDFLARED_ASSET='cloudflared-linux-arm64' ;;
-            macOS/X64) CLOUDFLARED_ASSET='cloudflared-darwin-amd64.tgz' ;;
-            macOS/ARM64) CLOUDFLARED_ASSET='cloudflared-darwin-arm64.tgz' ;;
+            Linux/X64) FRP_ASSET="linux_amd64" ;;
+            Linux/ARM64) FRP_ASSET="linux_arm64" ;;
+            macOS/X64) FRP_ASSET="darwin_amd64" ;;
+            macOS/ARM64) FRP_ASSET="darwin_arm64" ;;
             *) echo "Unsupported runner platform: $RUNNER_OS/$RUNNER_ARCH" >&2; exit 1 ;;
           esac
-          if [[ "$CLOUDFLARED_ASSET" == *.tgz ]]; then
-            curl --fail --silent --show-error --location --output "$OPENCODE_WEB_DIR/cloudflared.tgz" \
-              "https://github.com/cloudflare/cloudflared/releases/latest/download/$CLOUDFLARED_ASSET"
-            tar -xzf "$OPENCODE_WEB_DIR/cloudflared.tgz" -C "$OPENCODE_WEB_DIR" cloudflared
-          else
-            curl --fail --silent --show-error --location --output "$OPENCODE_WEB_DIR/cloudflared" \
-              "https://github.com/cloudflare/cloudflared/releases/latest/download/$CLOUDFLARED_ASSET"
-          fi
-          chmod 755 "$OPENCODE_WEB_DIR/cloudflared"
+          curl --fail --silent --show-error --location --output "$OPENCODE_WEB_DIR/frp.tgz" \
+            "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_${FRP_ASSET}.tar.gz"
+          tar -xzf "$OPENCODE_WEB_DIR/frp.tgz" -C "$OPENCODE_WEB_DIR" --strip-components=1 "frp_${FRP_VERSION}_${FRP_ASSET}/frpc"
+          chmod 755 "$OPENCODE_WEB_DIR/frpc"
           export OPENCODE_CONTROL_PORT OPENCODE_WEB_PORT
           export GH_TOKEN='${{ github.token }}'
           nohup node "$RUNTIME_DIR/scripts/session-lifecycle.mjs" > "$OPENCODE_WEB_DIR/lifecycle.log" 2>&1 &
@@ -1322,7 +1318,7 @@ jobs:
           if [[ -f "$RUNTIME_DIR/scripts/worker-tunnel.mjs" ]]; then
             /usr/bin/time -p node "$RUNTIME_DIR/scripts/worker-tunnel.mjs" stop
           fi
-          [[ -f "$OPENCODE_WEB_DIR/cloudflared.pid" ]] && kill "$(cat "$OPENCODE_WEB_DIR/cloudflared.pid")" 2>/dev/null || true
+          [[ -f "$OPENCODE_WEB_DIR/frpc.pid" ]] && kill "$(cat "$OPENCODE_WEB_DIR/frpc.pid")" 2>/dev/null || true
           [[ -f "$OPENCODE_WEB_DIR/live-files.pid" ]] && /usr/bin/time -p kill "$(cat "$OPENCODE_WEB_DIR/live-files.pid")" 2>/dev/null || true
           [[ -f "$OPENCODE_WEB_DIR/opencode.pid" ]] && kill "$(cat "$OPENCODE_WEB_DIR/opencode.pid")" 2>/dev/null || true
           [[ -f "$OPENCODE_WEB_DIR/opencode-run.pid" ]] && kill "$(cat "$OPENCODE_WEB_DIR/opencode-run.pid")" 2>/dev/null || true
